@@ -1,0 +1,1267 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Prestart Monitor</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+:root{
+  color-scheme: light;
+  --bg:#f4f4f2; --surface:#fcfcfb; --surface-2:#efeeeb; --surface-3:#e4e3df;
+  --border:#dddcd7; --border-strong:#c4c3bd;
+  --text:#0b0b0b; --text-2:#52514e; --text-3:#7a7974;
+  --accent:#2a78d6; --accent-soft:#e3eefb; --accent-ink:#1c5cab;
+  --good:#0ca30c; --warn:#fab219; --crit:#d03b3b; --serious:#ec835a;
+  --crit-soft:#fbeaea; --warn-soft:#fdf3dc; --good-soft:#e5f5e5;
+  --cell-off:#e7e6e2; --cell-inactive:transparent;
+  --shadow:0 1px 2px rgba(0,0,0,.05),0 2px 8px rgba(0,0,0,.04);
+  --radius:10px;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme: dark;
+    --bg:#121211; --surface:#1a1a19; --surface-2:#242422; --surface-3:#2e2e2b;
+    --border:#33332f; --border-strong:#4a4a45;
+    --text:#f0efec; --text-2:#c3c2b7; --text-3:#8f8e86;
+    --accent:#3987e5; --accent-soft:#1d2a3b; --accent-ink:#86b6ef;
+    --crit-soft:#3a1f1f; --warn-soft:#3a3020; --good-soft:#1c321c;
+    --cell-off:#2a2a27;
+    --shadow:none;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme: dark;
+  --bg:#121211; --surface:#1a1a19; --surface-2:#242422; --surface-3:#2e2e2b;
+  --border:#33332f; --border-strong:#4a4a45;
+  --text:#f0efec; --text-2:#c3c2b7; --text-3:#8f8e86;
+  --accent:#3987e5; --accent-soft:#1d2a3b; --accent-ink:#86b6ef;
+  --crit-soft:#3a1f1f; --warn-soft:#3a3020; --good-soft:#1c321c;
+  --cell-off:#2a2a27;
+  --shadow:none;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1440px;margin:0 auto;padding:0 16px}
+button,input,select{font:inherit;color:inherit}
+.num{font-variant-numeric:tabular-nums}
+
+/* Header */
+header.top{background:var(--surface);border-bottom:1px solid var(--border)}
+header.top .wrap{display:flex;flex-wrap:wrap;align-items:center;gap:12px 20px;padding-top:14px;padding-bottom:14px}
+.brand{display:flex;align-items:center;gap:10px;margin-right:auto;min-width:0}
+.brand .logo{width:30px;height:30px;border-radius:8px;background:var(--accent);display:grid;place-items:center;color:#fff;flex:none}
+.brand h1{font-size:17px;margin:0;letter-spacing:-.01em}
+.brand .sub{font-size:12px;color:var(--text-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.actions{display:flex;flex-wrap:wrap;gap:8px}
+.btn{display:inline-flex;align-items:center;gap:6px;height:34px;padding:0 12px;border-radius:8px;border:1px solid var(--border-strong);background:var(--surface);cursor:pointer;white-space:nowrap;font-weight:500}
+.btn:hover{background:var(--surface-2)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn.primary:hover{filter:brightness(1.07)}
+.btn.ghost{border-color:transparent;background:transparent;color:var(--text-2)}
+.btn.ghost:hover{background:var(--surface-2)}
+.btn:disabled{opacity:.45;cursor:default}
+.btn svg{width:16px;height:16px}
+input[type=file]{display:none}
+
+/* Toast */
+.toast{position:fixed;left:50%;bottom:20px;transform:translateX(-50%) translateY(20px);background:var(--text);color:var(--bg);padding:10px 16px;border-radius:8px;opacity:0;pointer-events:none;transition:.2s;z-index:50;max-width:calc(100% - 32px);font-size:13px}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+.toast.err{background:var(--crit);color:#fff}
+
+/* Filters */
+.filters{position:sticky;top:0;z-index:20;background:color-mix(in srgb,var(--bg) 92%,transparent);backdrop-filter:blur(6px);border-bottom:1px solid var(--border)}
+.filters .wrap{display:flex;flex-wrap:wrap;gap:10px 12px;align-items:flex-end;padding-top:10px;padding-bottom:10px}
+.field{display:flex;flex-direction:column;gap:3px;min-width:0}
+.field label{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--text-3)}
+.field select,.field input{height:34px;border:1px solid var(--border-strong);background:var(--surface);border-radius:8px;padding:0 10px;min-width:0}
+.field select{padding-right:6px}
+.field input[type=search]{width:190px}
+.field.fleet select{width:130px}.field.emp select{width:170px}.field.status select{width:150px}
+.field input[type=date]{width:145px}
+.check{display:inline-flex;align-items:center;gap:6px;height:34px;color:var(--text-2);cursor:pointer;user-select:none;white-space:nowrap}
+.check input{width:16px;height:16px;accent-color:var(--accent);margin:0}
+
+/* Main */
+main{padding:18px 0 40px}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:18px}
+.tile{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px;box-shadow:var(--shadow);cursor:default}
+.tile[data-go]{cursor:pointer}
+.tile[data-go]:hover{border-color:var(--border-strong)}
+.tile .k{font-size:12px;color:var(--text-2);display:flex;align-items:center;gap:6px}
+.tile .v{font-size:26px;font-weight:650;letter-spacing:-.02em;margin-top:2px}
+.tile .s{font-size:12px;color:var(--text-3)}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex:none}
+
+.tabs{display:flex;gap:4px;border-bottom:1px solid var(--border);margin-bottom:16px;overflow-x:auto}
+.tab{appearance:none;border:0;background:none;padding:10px 14px;cursor:pointer;color:var(--text-2);font-weight:550;border-bottom:2px solid transparent;margin-bottom:-1px;white-space:nowrap;display:flex;align-items:center;gap:6px}
+.tab:hover{color:var(--text)}
+.tab[aria-selected=true]{color:var(--text);border-bottom-color:var(--accent)}
+.tab .count{font-size:11px;background:var(--surface-3);color:var(--text-2);border-radius:10px;padding:1px 7px;font-weight:600}
+.tab .count.bad{background:var(--crit);color:#fff}
+.panel{display:none}.panel.on{display:block}
+
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);margin-bottom:16px}
+.card-h{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;padding:12px 16px;border-bottom:1px solid var(--border)}
+.card-h h2{font-size:14px;margin:0;font-weight:650}
+.card-h .hint{font-size:12px;color:var(--text-3)}
+.card-h .spacer{flex:1}
+.card-b{padding:14px 16px}
+
+/* Table */
+.tbl-wrap{overflow-x:auto}
+table.grid{width:100%;border-collapse:collapse;font-size:13px}
+table.grid th{position:sticky;top:0;background:var(--surface-2);text-align:left;font-weight:600;color:var(--text-2);font-size:12px;padding:8px 10px;border-bottom:1px solid var(--border);white-space:nowrap;user-select:none}
+table.grid th.sortable{cursor:pointer}
+table.grid th.sortable:hover{color:var(--text)}
+table.grid th .arr{display:inline-block;width:10px;color:var(--accent)}
+table.grid td{padding:7px 10px;border-bottom:1px solid var(--border);white-space:nowrap;vertical-align:top}
+table.grid td.wrap-cell{white-space:normal;min-width:260px;max-width:460px}
+table.grid tr:hover td{background:var(--surface-2)}
+table.grid .r{text-align:right}
+tr.row-missing td{background:var(--crit-soft)}
+tr.row-missing td:first-child{box-shadow:inset 3px 0 0 var(--crit)}
+tr.row-incomplete td:first-child{box-shadow:inset 3px 0 0 var(--warn)}
+tr.row-flag td:first-child{box-shadow:inset 3px 0 0 var(--crit)}
+.badge{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:550;padding:1px 8px 1px 6px;border-radius:10px;border:1px solid var(--border);background:var(--surface)}
+.badge.good .dot{background:var(--good)}
+.badge.warn .dot{background:var(--warn)}
+.badge.crit .dot{background:var(--crit)}
+.badge.crit{border-color:color-mix(in srgb,var(--crit) 40%,var(--border))}
+.flag{color:var(--crit);font-weight:600}
+.km-bad{color:var(--crit);font-weight:650}
+.muted{color:var(--text-3)}
+.pager{display:flex;align-items:center;gap:10px;justify-content:flex-end;padding:10px 16px;color:var(--text-2);font-size:13px;flex-wrap:wrap}
+.empty-row td{text-align:center;color:var(--text-3);padding:28px}
+
+/* Usage */
+.seg{display:inline-flex;border:1px solid var(--border-strong);border-radius:8px;overflow:hidden}
+.seg button{border:0;background:var(--surface);padding:5px 12px;cursor:pointer;color:var(--text-2);font-weight:550;font-size:13px}
+.seg button+button{border-left:1px solid var(--border-strong)}
+.seg button[aria-pressed=true]{background:var(--accent-soft);color:var(--accent-ink)}
+.legend{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:12px;color:var(--text-2)}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.sw{width:12px;height:12px;border-radius:3px;display:inline-block}
+.chart-box{width:100%}
+.chart-box svg{display:block;width:100%;height:auto;overflow:visible}
+.ax text{fill:var(--text-3);font-size:11px}
+.ax line,.ax path{stroke:var(--border)}
+.lbl{fill:var(--text-2);font-size:11px}
+.lbl-strong{fill:var(--text);font-size:12px;font-weight:600}
+
+.matrix-scroll{overflow-x:auto;padding-bottom:4px}
+.matrix{display:inline-grid;gap:2px 0;font-size:11px;min-width:100%}
+.mrow{display:flex;align-items:center}
+.mlabel{position:sticky;left:0;z-index:2;background:var(--surface);width:150px;flex:none;padding-right:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12px;color:var(--text-2)}
+.mlabel b{color:var(--text);font-weight:600}
+.mlabel .pct{float:right;color:var(--text-3);font-variant-numeric:tabular-nums}
+.mcells{display:flex;gap:2px}
+.mc{width:16px;height:16px;border-radius:3px;flex:none;position:relative;cursor:pointer}
+.mc.wk{margin-left:5px}
+.mc.done{background:var(--good)}
+.mc.inc{background:var(--warn)}
+.mc.miss{background:var(--crit)}
+.mc.off{background:var(--cell-off);cursor:default}
+.mc.off.has{cursor:pointer}
+.mc.inactive{background:transparent;box-shadow:inset 0 0 0 1px var(--border);opacity:.5;cursor:default}
+.mc.kmf::after{content:"";position:absolute;inset:5px;border-radius:50%;background:var(--surface)}
+.mc:hover{outline:2px solid var(--text);outline-offset:1px;z-index:1}
+.mc.off:not(.has):hover,.mc.inactive:hover{outline:none}
+.mhead .mc{background:none;cursor:default;height:auto;text-align:center;color:var(--text-3);font-size:10px;line-height:1.2;overflow:visible}
+.mhead .mc:hover{outline:none}
+.mhead .mc.we{color:var(--text-3);opacity:.6}
+.mhead .mc.mon{color:var(--text-2);font-weight:600}
+.mmonth{height:14px}
+.mmonth .mc{white-space:nowrap;text-align:left;color:var(--text-2);font-weight:600}
+
+/* Calendar */
+.calnav{display:flex;gap:4px}
+.calnav .btn{height:30px;padding:0 10px}
+#calTitle{min-width:160px}
+.cal-scroll{overflow-x:auto}
+.cal{display:grid;grid-template-columns:repeat(7,minmax(96px,1fr));border-top:1px solid var(--border);border-left:1px solid var(--border);min-width:700px}
+.cal .dh{padding:6px 8px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--text-3);background:var(--surface-2);border-right:1px solid var(--border);border-bottom:1px solid var(--border)}
+.cal .day{min-height:92px;padding:5px 6px 7px;border-right:1px solid var(--border);border-bottom:1px solid var(--border);display:flex;flex-direction:column;gap:4px;min-width:0}
+.cal.week .day{min-height:220px}
+.cal .day.out{background:var(--surface-2)}
+.cal .day.out .chips{opacity:.55}
+.cal .day.off .dn{color:var(--text-3)}
+.cal .dn{font-size:12px;font-weight:600;color:var(--text-2);display:flex;align-items:center;gap:6px;cursor:pointer;width:max-content}
+.cal .dn:hover{color:var(--accent)}
+.cal .dn .cnt{font-weight:500;color:var(--text-3)}
+.cal .day.today .dn b{background:var(--accent);color:#fff;border-radius:10px;padding:0 6px}
+.chips{display:flex;flex-wrap:wrap;gap:3px}
+.chip{display:inline-block;font-style:normal;font-size:11.5px;font-weight:650;line-height:18px;padding:0 6px;border-radius:5px;white-space:nowrap;letter-spacing:.01em;cursor:default}
+.chip.done{background:#087a08;color:#fff}
+.chip.inc{background:transparent;color:var(--text-2);box-shadow:inset 0 0 0 1px var(--border-strong)}
+.chip.miss{background:transparent;color:var(--crit);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--crit) 55%,transparent);text-decoration:line-through;text-decoration-thickness:1px}
+.cal.week .chips{flex-direction:column;align-items:flex-start}
+.cal.week .chip{font-size:12.5px;line-height:22px;padding:0 8px}
+
+/* Km */
+.multiples{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:12px}
+.mini{border:1px solid var(--border);border-radius:8px;padding:10px 12px 6px;background:var(--surface)}
+.mini-h{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.mini-h b{font-size:14px}
+.mini-h .s{font-size:12px;color:var(--text-3)}
+.mini-h .bad{margin-left:auto;font-size:12px;color:var(--crit);font-weight:600}
+.mini-h .ok{margin-left:auto;font-size:12px;color:var(--text-3)}
+.line{fill:none;stroke:var(--accent);stroke-width:2;stroke-linejoin:round;stroke-linecap:round}
+.pt{fill:var(--accent)}
+.pt-bad{fill:var(--crit);stroke:var(--surface);stroke-width:2}
+.gridline{stroke:var(--border);stroke-dasharray:2 3}
+
+/* Rules */
+details.rules{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:16px}
+details.rules summary{cursor:pointer;padding:10px 16px;font-weight:600;font-size:13px;color:var(--text-2);list-style:none;display:flex;align-items:center;gap:8px}
+details.rules summary::-webkit-details-marker{display:none}
+details.rules summary::before{content:"▸";transition:.15s;color:var(--text-3)}
+details.rules[open] summary::before{transform:rotate(90deg)}
+.rules-b{display:flex;flex-wrap:wrap;gap:14px 28px;padding:4px 16px 16px;align-items:flex-end}
+.days{display:flex;gap:4px}
+.days label{display:inline-flex;align-items:center;justify-content:center;width:40px;height:32px;border:1px solid var(--border-strong);border-radius:7px;cursor:pointer;font-size:12px;font-weight:600;color:var(--text-2);user-select:none}
+.days input{display:none}
+.days input:checked+span{color:var(--accent-ink)}
+.days label:has(input:checked){background:var(--accent-soft);border-color:var(--accent)}
+.field input.small{width:110px}
+
+/* Empty / drop */
+.empty{max-width:640px;margin:48px auto;text-align:center;background:var(--surface);border:2px dashed var(--border-strong);border-radius:16px;padding:40px 24px}
+.empty h2{margin:10px 0 6px;font-size:20px}
+.empty p{color:var(--text-2);margin:0 0 18px}
+.empty .icon{width:48px;height:48px;margin:0 auto;border-radius:12px;background:var(--accent-soft);color:var(--accent);display:grid;place-items:center}
+.drop-overlay{position:fixed;inset:0;background:color-mix(in srgb,var(--accent) 18%,transparent);border:3px dashed var(--accent);z-index:60;display:none;place-items:center;font-size:20px;font-weight:650;color:var(--accent-ink)}
+.drop-overlay.on{display:grid}
+
+/* Tooltip */
+.tip{position:fixed;z-index:70;pointer-events:none;background:var(--surface);color:var(--text);border:1px solid var(--border-strong);border-radius:8px;padding:8px 10px;font-size:12px;box-shadow:0 4px 18px rgba(0,0,0,.18);max-width:320px;display:none}
+.tip .t{font-weight:650;margin-bottom:3px}
+.tip .row{display:flex;gap:8px;align-items:center;color:var(--text-2)}
+.tip .row b{color:var(--text);font-weight:600}
+
+@media (max-width:720px){
+  .filters{position:static}
+  .field input[type=search]{width:100%}
+  .field.search{flex:1 1 100%}
+  .field.fleet,.field.emp,.field.status{flex:1 1 140px}
+  .field.fleet select,.field.emp select,.field.status select{width:100%}
+  .field.date{flex:1 1 140px}.field input[type=date]{width:100%}
+  .mlabel{width:96px}
+  .tile .v{font-size:22px}
+  .brand .sub{white-space:normal}
+}
+@media print{.filters,.actions,.tabs{display:none}.panel{display:block}}
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <div class="brand">
+      <div class="logo" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></div>
+      <div style="min-width:0">
+        <h1>Prestart Monitor</h1>
+        <div class="sub" id="dataStatus">No data loaded</div>
+      </div>
+    </div>
+    <div class="actions">
+      <label class="btn primary" for="fileIn" title="Import a Gearbox Prestart Report (.xlsx, .xls, .csv) or a JSON backup. New rows are added and existing Prestart #s updated.">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5"/><path d="M12 3v12"/></svg>
+        Import / update
+      </label>
+      <input type="file" id="fileIn" accept=".xlsx,.xls,.xlsm,.csv,.json" multiple>
+      <button class="btn" id="btnCsv" disabled title="Download the records currently shown in the table (incl. flags) as CSV">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
+        Export CSV
+      </button>
+      <button class="btn" id="btnJson" disabled title="Download all stored data as a JSON backup you can re-import later or on another device">Backup</button>
+      <button class="btn ghost" id="btnClear" disabled title="Remove all stored data from this browser">Clear</button>
+    </div>
+  </div>
+</header>
+
+<div class="filters" id="filterBar" hidden>
+  <div class="wrap">
+    <div class="field fleet"><label for="fFleet">Fleet #</label><select id="fFleet"></select></div>
+    <div class="field emp"><label for="fEmp">Employee</label><select id="fEmp"></select></div>
+    <div class="field date"><label for="fFrom">From</label><input type="date" id="fFrom"></div>
+    <div class="field date"><label for="fTo">To</label><input type="date" id="fTo"></div>
+    <div class="field status"><label for="fStatus">Show</label>
+      <select id="fStatus">
+        <option value="">All records</option>
+        <option value="completed">Completed</option>
+        <option value="incomplete">Incomplete</option>
+        <option value="missing">Missing days only</option>
+        <option value="kmflag">Km discrepancies</option>
+      </select>
+    </div>
+    <div class="field search"><label for="fSearch">Search</label><input type="search" id="fSearch" placeholder="Rego, description, prestart #…"></div>
+    <label class="check" title="Insert a row for each expected day with no prestart"><input type="checkbox" id="fMissing" checked> Show missing days</label>
+    <button class="btn ghost" id="btnReset">Reset</button>
+  </div>
+</div>
+
+<main>
+  <div class="wrap">
+    <section id="emptyState" class="empty">
+      <div class="icon"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M12 18v-6"/><path d="M9 15l3-3 3 3"/></svg></div>
+      <h2>Import a Gearbox prestart report</h2>
+      <p>Drop the exported <b>.xlsx</b> or <b>.csv</b> here, or use <b>Import / update</b>. Data stays in this browser. Importing a newer export later adds new prestarts and updates existing ones by Prestart #.</p>
+      <label class="btn primary" for="fileIn">Choose file…</label>
+    </section>
+
+    <div id="app" hidden>
+      <div class="tiles" id="tiles"></div>
+
+      <details class="rules" id="rules">
+        <summary>Rules for missing days &amp; km checks</summary>
+        <div class="rules-b">
+          <div class="field"><label>Expected prestart days</label><div class="days" id="setDays"></div></div>
+          <label class="check" title="Only count a day as missing between the first and last prestart for that fleet (or employee). Turn off to check the whole date range."><input type="checkbox" id="setActive"> Only within each fleet's active period</label>
+          <div class="field"><label for="setMaxKm">Max km per day</label><input class="small" type="number" id="setMaxKm" min="50" step="50"></div>
+          <div class="field"><label for="setSameDay">Same-day tolerance (km)</label><input class="small" type="number" id="setSameDay" min="0" step="10"></div>
+          <div class="field"><label for="setMinKm">Treat km ≤ as blank</label><input class="small" type="number" id="setMinKm" min="0" step="1"></div>
+        </div>
+      </details>
+
+      <nav class="tabs" role="tablist">
+        <button class="tab" role="tab" data-tab="records" aria-selected="true">Records <span class="count" id="cRecords">0</span></button>
+        <button class="tab" role="tab" data-tab="usage" aria-selected="false">Usage by day <span class="count" id="cUsage">0</span></button>
+        <button class="tab" role="tab" data-tab="cal" aria-selected="false">Calendar</button>
+        <button class="tab" role="tab" data-tab="km" aria-selected="false">Km discrepancies <span class="count" id="cKm">0</span></button>
+      </nav>
+
+      <section class="panel on" id="p-records">
+        <div class="card">
+          <div class="tbl-wrap"><table class="grid" id="tbl"><thead></thead><tbody></tbody></table></div>
+          <div class="pager" id="pager"></div>
+        </div>
+      </section>
+
+      <section class="panel" id="p-usage">
+        <div class="card">
+          <div class="card-h">
+            <h2>Prestart usage by weekday</h2>
+            <span class="hint" id="wkHint"></span>
+            <span class="spacer"></span>
+            <div class="legend">
+              <span><i class="sw" style="background:var(--good)"></i>Completed</span>
+              <span><i class="sw" style="background:var(--warn)"></i>Incomplete only</span>
+              <span><i class="sw" style="background:var(--crit)"></i>Missing</span>
+            </div>
+          </div>
+          <div class="card-b"><div class="chart-box" id="wkChart"></div></div>
+        </div>
+        <div class="card">
+          <div class="card-h">
+            <h2>Daily calendar</h2>
+            <div class="seg" id="groupSeg">
+              <button data-g="fleet" aria-pressed="true">By fleet</button>
+              <button data-g="employee" aria-pressed="false">By employee</button>
+            </div>
+            <span class="spacer"></span>
+            <div class="legend">
+              <span><i class="sw" style="background:var(--good)"></i>Completed</span>
+              <span><i class="sw" style="background:var(--warn)"></i>Incomplete only</span>
+              <span><i class="sw" style="background:var(--crit)"></i>Missing</span>
+              <span><i class="sw" style="background:var(--cell-off)"></i>Not expected</span>
+              <span><i class="sw" style="box-shadow:inset 0 0 0 1px var(--border)"></i>Inactive</span>
+              <span><i class="sw" style="background:var(--good);position:relative"><i style="position:absolute;inset:3px;border-radius:50%;background:var(--surface)"></i></i>Km flag</span>
+            </div>
+          </div>
+          <div class="card-b">
+            <div class="matrix-scroll"><div class="matrix" id="matrix"></div></div>
+            <div class="muted" style="font-size:12px;margin-top:8px">Click a day to open its records. % = completed ÷ expected days.</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel" id="p-cal">
+        <div class="card">
+          <div class="card-h">
+            <div class="seg" id="calMode">
+              <button data-m="week" aria-pressed="false">Week</button>
+              <button data-m="month" aria-pressed="true">Month</button>
+            </div>
+            <div class="calnav">
+              <button class="btn" data-nav="-1" aria-label="Previous">‹</button>
+              <button class="btn" data-nav="0">Latest</button>
+              <button class="btn" data-nav="1" aria-label="Next">›</button>
+            </div>
+            <h2 id="calTitle"></h2>
+            <span class="spacer"></span>
+            <div class="legend">
+              <span><i class="chip done" style="padding:0 6px">REGO</i>Completed prestart</span>
+              <span><i class="chip inc" style="padding:0 6px">REGO</i>Incomplete</span>
+              <span><i class="chip miss" style="padding:0 6px">REGO</i>Missing</span>
+            </div>
+          </div>
+          <div class="card-b">
+            <div class="cal-scroll"><div class="cal" id="cal"></div></div>
+            <div class="muted" style="font-size:12px;margin-top:8px">Uses the filters above, e.g. set <b>Show → Completed</b> for green regos only, or untick <b>Show missing days</b>. Click a date to open its records.</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel" id="p-km">
+        <div class="card">
+          <div class="card-h">
+            <h2>Odometer by fleet</h2>
+            <span class="hint">Blue line = consistent readings · red points = flagged (off-scale values are pinned to the edge ▲▼)</span>
+          </div>
+          <div class="card-b"><div class="multiples" id="multiples"></div></div>
+        </div>
+        <div class="card">
+          <div class="card-h"><h2>Flagged readings</h2><span class="hint" id="kmHint"></span></div>
+          <div class="tbl-wrap"><table class="grid" id="kmTbl"><thead></thead><tbody></tbody></table></div>
+        </div>
+      </section>
+    </div>
+  </div>
+</main>
+
+<div class="drop-overlay" id="dropOv">Drop to import</div>
+<div class="tip" id="tip"></div>
+<div class="toast" id="toast"></div>
+
+<script>
+(() => {
+'use strict';
+/* ---------- constants & state ---------- */
+const STORE_KEY = 'prestartMonitor.v1';
+const DOW = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const DEFAULT_SETTINGS = { days:[1,1,1,1,1,1,0], activeOnly:true, maxKmPerDay:1200, sameDayTol:50, minKm:10 };
+const PAGE = 100;
+
+const S = {
+  records: [],            // normalised prestart records
+  meta: { lastImport:null, files:[] },
+  settings: { ...DEFAULT_SETTINGS },
+  f: { fleet:'', emp:'', from:'', to:'', status:'', q:'', missing:true },
+  sort: { key:'date', dir:-1 },
+  kmSort: { key:'date', dir:-1 },
+  page: 0,
+  tab: 'records',
+  groupBy: 'fleet',
+  cal: { mode:'month', anchor:null },
+  A: null                // analysis cache
+};
+
+const $ = s => document.querySelector(s);
+const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmtN = n => (n == null || isNaN(n)) ? '' : Number(n).toLocaleString('en-AU');
+const dowOf = iso => (new Date(iso + 'T00:00:00Z').getUTCDay() + 6) % 7;
+const addDays = (iso, n) => { const d = new Date(iso + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0,10); };
+const daysBetween = (a, b) => Math.round((Date.parse(b) - Date.parse(a)) / 864e5);
+const fmtDate = iso => iso ? `${DOW[dowOf(iso)]} ${iso.slice(8,10)}/${iso.slice(5,7)}/${iso.slice(0,4)}` : '';
+const fmtShort = iso => iso ? `${DOW[dowOf(iso)]} ${+iso.slice(8,10)} ${MON[+iso.slice(5,7)-1]}` : '';
+const idNum = id => { const n = parseFloat(id); return isNaN(n) ? Infinity : n; };
+
+/* ---------- storage ---------- */
+function save(){
+  try { localStorage.setItem(STORE_KEY, JSON.stringify({ records:S.records, meta:S.meta, settings:S.settings, groupBy:S.groupBy, calMode:S.cal.mode })); }
+  catch(e){ toast('Could not save to browser storage – data will be lost on reload. Use Backup.', true); }
+}
+function load(){
+  try {
+    const raw = localStorage.getItem(STORE_KEY); if (!raw) return;
+    const d = JSON.parse(raw);
+    if (Array.isArray(d.records)) S.records = d.records;
+    if (d.meta) S.meta = d.meta;
+    if (d.settings) S.settings = { ...DEFAULT_SETTINGS, ...d.settings };
+    if (d.groupBy) S.groupBy = d.groupBy;
+    if (d.calMode === 'week' || d.calMode === 'month') S.cal.mode = d.calMode;
+  } catch(e){ /* storage unavailable */ }
+}
+
+/* ---------- parsing ---------- */
+const HEAD = {
+  'groups':'group','group':'group','subgroups':'subgroup','subgroup':'subgroup',
+  'prestart#':'id','prestart':'id','prestartno':'id','id':'id',
+  'fleet#':'fleet','fleet':'fleet','fleetno':'fleet',
+  'registration':'rego','rego':'rego','description':'desc','desc':'desc',
+  'date':'date','employee':'employee','employee#':'empNo','employeeno':'empNo','empno':'empNo',
+  'kilometres':'km','kilometers':'km','km':'km','odometer':'km','hours':'hours',
+  'type':'type','completed':'completed','notcompleted':'notCompleted',
+  'pagenumber':'page','timetaken':'timeTaken','gearboxentry':'gearbox','notes':'notes','status':'status'
+};
+const normHead = h => String(h ?? '').toLowerCase().replace(/[^a-z0-9#]/g,'');
+const str = v => v == null ? '' : String(v).replace(/\s+/g,' ').trim();
+function num(v){
+  if (v == null || v === '') return null;
+  if (typeof v === 'number') return isFinite(v) ? v : null;
+  const n = parseFloat(String(v).replace(/[, ]/g,''));
+  return isNaN(n) ? null : n;
+}
+const pad = n => String(n).padStart(2,'0');
+function parseDate(v){
+  if (v == null || v === '') return '';
+  if (v instanceof Date && !isNaN(v)) {
+    // SheetJS dates can carry a time-zone offset; round to nearest day
+    const t = new Date(v.getTime() + 12*3600e3);
+    return `${t.getFullYear()}-${pad(t.getMonth()+1)}-${pad(t.getDate())}`;
+  }
+  if (typeof v === 'number') {
+    const d = new Date(Date.UTC(1899,11,30) + Math.round(v) * 864e5);
+    return d.toISOString().slice(0,10);
+  }
+  const s = String(v).trim();
+  let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (m) return `${m[1]}-${pad(m[2])}-${pad(m[3])}`;
+  m = s.match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2,4})/);   // Australian dd/mm/yyyy
+  if (m) { let y = +m[3]; if (y < 100) y += 2000; return `${y}-${pad(m[2])}-${pad(m[1])}`; }
+  const d = new Date(s); return isNaN(d) ? '' : `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+}
+function truthy(v){ if (typeof v === 'boolean') return v; const s = String(v ?? '').trim().toLowerCase(); return s === 'true' || s === '1' || s === 'yes' || s === 'y'; }
+
+function normalise(o){
+  const r = {};
+  for (const [k,v] of Object.entries(o)) { const key = HEAD[normHead(k)]; if (key && r[key] === undefined) r[key] = v; }
+  const rec = {
+    id: str(r.id), group: str(r.group), subgroup: str(r.subgroup), fleet: str(r.fleet), rego: str(r.rego), desc: str(r.desc),
+    date: parseDate(r.date), employee: str(r.employee), empNo: str(r.empNo), km: num(r.km), hours: num(r.hours),
+    type: str(r.type), timeTaken: str(r.timeTaken), gearbox: truthy(r.gearbox), notes: str(r.notes)
+  };
+  if (r.completed != null && r.completed !== '') rec.completed = truthy(r.completed) || num(r.completed) > 0;
+  else if (r.status) rec.completed = /^complete/i.test(str(r.status));
+  else rec.completed = !/incomplete/i.test(rec.timeTaken);
+  if (!rec.completed && !rec.timeTaken) rec.timeTaken = 'Incomplete';
+  if (!rec.id) rec.id = 'x-' + [rec.fleet, rec.date, rec.employee, rec.km, rec.hours, rec.timeTaken].join('|');
+  return rec;
+}
+
+function rowsFromSheet(ws){
+  const aoa = XLSX.utils.sheet_to_json(ws, { header:1, defval:null, raw:true, blankrows:false });
+  let hi = aoa.findIndex(row => { const h = (row||[]).map(normHead); return h.some(x => HEAD[x]==='fleet') && h.some(x => HEAD[x]==='date'); });
+  if (hi < 0) return null;
+  const head = aoa[hi];
+  return aoa.slice(hi+1).filter(r => r && r.some(c => c != null && c !== '')).map(r => { const o = {}; head.forEach((h,i) => { if (h != null) o[h] = r[i]; }); return o; });
+}
+
+async function readFile(file){
+  const name = file.name.toLowerCase();
+  if (name.endsWith('.json')) {
+    const j = JSON.parse(await file.text());
+    const arr = Array.isArray(j) ? j : (j.records || []);
+    return arr.map(x => (x && x.fleet !== undefined && x.date && /^\d{4}-/.test(x.date)) ? { ...x, id:String(x.id) } : normalise(x));
+  }
+  if (!window.XLSX) throw new Error('Spreadsheet reader failed to load (needs internet access to cdnjs.cloudflare.com). JSON backups still import.');
+  const buf = await file.arrayBuffer();
+  const isText = /\.(csv|txt)$/.test(name);
+  const wb = XLSX.read(buf, { type:'array', cellDates:true, raw:isText });
+  for (const sn of wb.SheetNames) {
+    const rows = rowsFromSheet(wb.Sheets[sn]);
+    if (rows && rows.length) return rows.map(normalise).filter(r => r.fleet || r.date);
+  }
+  throw new Error(`No sheet in "${file.name}" has Fleet # and Date columns.`);
+}
+
+function merge(incoming){
+  const map = new Map(S.records.map(r => [r.id, r]));
+  let added = 0, updated = 0, same = 0;
+  for (const r of incoming) {
+    const old = map.get(r.id);
+    if (!old) { added++; map.set(r.id, r); }
+    else if (JSON.stringify(old) !== JSON.stringify(r)) { updated++; map.set(r.id, r); }
+    else same++;
+  }
+  S.records = [...map.values()];
+  return { added, updated, same };
+}
+
+async function importFiles(files){
+  let tot = { added:0, updated:0, same:0 }, names = [];
+  try {
+    for (const f of files) {
+      const recs = await readFile(f);
+      const res = merge(recs);
+      for (const k in tot) tot[k] += res[k];
+      names.push(f.name);
+    }
+    S.meta.lastImport = new Date().toISOString();
+    S.meta.files = [...names, ...(S.meta.files||[])].slice(0,10);
+    save(); S.A = null; S.page = 0;
+    render(true);
+    toast(`Imported ${names.join(', ')} — ${tot.added} new, ${tot.updated} updated, ${tot.same} unchanged`);
+  } catch(e) { console.error(e); toast(e.message || 'Import failed', true); }
+}
+
+/* ---------- analysis ---------- */
+function analyse(){
+  if (S.A) return S.A;
+  const st = S.settings;
+  const recs = S.records.filter(r => r.date);
+  const byId = new Map(recs.map(r => [r.id, r]));
+  const flags = new Map();   // id -> [{kind,label,detail}]
+  const delta = new Map();   // id -> km since previous accepted reading
+  const series = new Map();  // fleet -> [{r, ok:boolean}]
+  const addFlag = (id, f) => { if (!flags.has(id)) flags.set(id, []); flags.get(id).push(f); };
+  const cmp = (a,b) => a.date < b.date ? -1 : a.date > b.date ? 1 : idNum(a.id) - idNum(b.id) || (a.id < b.id ? -1 : 1);
+  const desc = r => `${fmtN(r.km)} on ${fmtShort(r.date)}${r.employee ? ' (' + r.employee + ')' : ''}`;
+
+  const fleets = [...new Set(recs.map(r => r.fleet))].filter(Boolean).sort((a,b)=>a.localeCompare(b,undefined,{numeric:true}));
+  const accepted = new Map(); // fleet -> accepted readings (for cross-fleet matching)
+
+  for (const fl of fleets) {
+    const all = recs.filter(r => r.fleet === fl && r.completed).sort(cmp);
+    const valid = [];
+    for (const r of all) {
+      if (r.km == null || r.km <= st.minKm) {
+        const swapped = r.km != null && r.hours != null && r.hours > 1000;
+        addFlag(r.id, swapped
+          ? { kind:'swap', label:'Km & hours swapped?', detail:`Km entered as ${fmtN(r.km)} while hours = ${fmtN(r.hours)} — looks like the odometer went in the hours field.` }
+          : { kind:'nokm', label:'No km entered', detail:`Completed prestart recorded ${r.km == null ? 'no' : fmtN(r.km)} km.` });
+      } else valid.push(r);
+    }
+    const ok = (a, b) => { const d = Math.max(1, daysBetween(a.date, b.date)); return b.km >= a.km && (b.km - a.km) <= st.maxKmPerDay * d; };
+    const out = [];
+    let ref = null;
+    for (let i = 0; i < valid.length; i++) {
+      const r = valid[i], nx = valid[i+1], nx2 = valid[i+2];
+      if (!ref) {
+        // first reading: accept unless the following readings agree with each other but not with it
+        if (nx && !ok(r, nx) && nx2 && ok(nx, nx2)) {
+          addFlag(r.id, { kind: r.km > nx.km ? 'spike':'rollback', label: r.km > nx.km ? 'Km too high' : 'Km too low', detail:`Doesn't fit the readings that follow (next: ${desc(nx)}).` });
+          out.push({ r, ok:false }); continue;
+        }
+        ref = r; out.push({ r, ok:true }); continue;
+      }
+      if (ok(ref, r)) { delta.set(r.id, r.km - ref.km); ref = r; out.push({ r, ok:true }); continue; }
+      const down = r.km < ref.km;
+      const days = Math.max(1, daysBetween(ref.date, r.date));
+      const diff = r.km - ref.km;
+      delta.set(r.id, diff);
+      const base = down
+        ? { kind:'rollback', label:'Km lower than previous', detail:`${fmtN(-diff)} km below previous reading ${desc(ref)}.` }
+        : { kind:'spike', label:'Km jump too large', detail:`+${fmtN(diff)} km in ${days} day${days>1?'s':''} since ${desc(ref)} (limit ${fmtN(st.maxKmPerDay)}/day).` };
+      if (nx && !ok(ref, nx) && ok(r, nx)) {
+        // following readings continue from this value: odometer sequence changed
+        base.kind = 'reset';
+        base.detail += ' Following readings continue from this value — odometer sequence changed (different vehicle or corrected odometer?).';
+        addFlag(r.id, base); ref = r; out.push({ r, ok:true, reset:true });
+      } else {
+        addFlag(r.id, base); out.push({ r, ok:false });
+      }
+    }
+    series.set(fl, out);
+    accepted.set(fl, out.filter(p => p.ok).map(p => p.r));
+  }
+
+  // same-day conflicts
+  const dayGroups = new Map();
+  for (const r of recs) if (r.completed && r.km > st.minKm) { const k = r.fleet + '|' + r.date; if (!dayGroups.has(k)) dayGroups.set(k, []); dayGroups.get(k).push(r); }
+  for (const g of dayGroups.values()) {
+    if (g.length < 2) continue;
+    for (const r of g) {
+      const others = g.filter(o => o !== r && Math.abs(o.km - r.km) > st.sameDayTol);
+      if (others.length) addFlag(r.id, { kind:'conflict', label:'Conflicting km same day', detail:`Same fleet, same day: ${others.map(o => `${fmtN(o.km)}${o.employee ? ' by ' + o.employee : ''}`).join('; ')}.` });
+    }
+  }
+
+  // cross-fleet match: a flagged reading that equals another fleet's reading within ±1 day
+  for (const [id, fl] of flags) {
+    const r = byId.get(id); if (!r || !(r.km > st.minKm) || fl.every(f => f.kind === 'conflict')) continue;
+    for (const [other, list] of accepted) {
+      if (other === r.fleet) continue;
+      const m = list.find(o => Math.abs(daysBetween(o.date, r.date)) <= 1 && Math.abs(o.km - r.km) <= Math.max(st.sameDayTol, 1));
+      if (m) { fl.push({ kind:'match', label:`Matches ${other}`, detail:`Matches ${other}'s reading ${desc(m)} — wrong Fleet # selected?` }); break; }
+    }
+  }
+
+  // which flags count as "km discrepancies" (all except informational match)
+  const flagged = new Set([...flags.keys()]);
+  const rego = new Map();
+  [...recs].sort(cmp).forEach(r => { if (r.fleet && r.rego) rego.set(r.fleet, r.rego); });
+  S.A = { recs, flags, rego, flagged, delta, series, fleets, employees:[...new Set(recs.map(r=>r.employee))].filter(Boolean).sort(),
+          minDate: recs.reduce((m,r)=>!m||r.date<m?r.date:m,''), maxDate: recs.reduce((m,r)=>!m||r.date>m?r.date:m,'') };
+  return S.A;
+}
+
+/* expected/missing days, grouped by fleet or employee */
+function usage(groupBy, A, from, to){
+  const st = S.settings;
+  const key = r => groupBy === 'fleet' ? r.fleet : r.employee;
+  const groups = new Map();
+  for (const r of A.recs) {
+    const k = key(r); if (!k) continue;
+    if (!groups.has(k)) groups.set(k, { key:k, first:r.date, last:r.date, days:new Map() });
+    const g = groups.get(k);
+    if (r.date < g.first) g.first = r.date; if (r.date > g.last) g.last = r.date;
+    if (!g.days.has(r.date)) g.days.set(r.date, []);
+    g.days.get(r.date).push(r);
+  }
+  const dates = [];
+  if (from && to && from <= to) for (let d = from; d <= to; d = addDays(d,1)) { dates.push(d); if (dates.length > 1500) break; }
+  const out = [];
+  for (const g of groups.values()) {
+    const cells = dates.map(d => {
+      const list = g.days.get(d) || [];
+      const expected = !!st.days[dowOf(d)];
+      const active = !st.activeOnly || (d >= g.first && d <= g.last);
+      let state;
+      const done = list.some(r => r.completed);
+      if (done) state = 'done';
+      else if (list.length) state = 'inc';
+      else if (!active) state = 'inactive';
+      else if (expected) state = 'miss';
+      else state = 'off';
+      const km = list.some(r => A.flagged.has(r.id));
+      return { d, state, list, expected: expected && active, km };
+    });
+    out.push({ ...g, cells });
+  }
+  out.sort((a,b) => a.key.localeCompare(b.key, undefined, { numeric:true }));
+  return { groups: out, dates };
+}
+
+/* ---------- filtering ---------- */
+function range(A){ return { from: S.f.from || A.minDate, to: S.f.to || A.maxDate }; }
+function matchRec(r){
+  const f = S.f;
+  if (f.fleet && r.fleet !== f.fleet) return false;
+  if (f.emp && r.employee !== f.emp) return false;
+  if (f.from && r.date < f.from) return false;
+  if (f.to && r.date > f.to) return false;
+  if (f.q) {
+    const q = f.q.toLowerCase();
+    if (![r.id, r.fleet, r.rego, r.desc, r.employee, r.group, r.timeTaken, r.km].some(v => String(v ?? '').toLowerCase().includes(q))) return false;
+  }
+  return true;
+}
+function missingRows(A){
+  const { from, to } = range(A);
+  const byEmp = !!S.f.emp;
+  const U = usage(byEmp ? 'employee' : 'fleet', A, from, to);
+  const rows = [];
+  for (const g of U.groups) {
+    if (byEmp ? g.key !== S.f.emp : (S.f.fleet && g.key !== S.f.fleet)) continue;
+    for (const c of g.cells) if (c.state === 'miss') rows.push({ missing:true, id:'', fleet: byEmp ? '' : g.key, employee: byEmp ? g.key : '', date:c.d, rego:'', desc:'' });
+  }
+  if (S.f.q) { const q = S.f.q.toLowerCase(); return rows.filter(r => (r.fleet + ' ' + r.employee + ' missing').toLowerCase().includes(q)); }
+  return rows;
+}
+
+function tableRows(A){
+  const st = S.f.status;
+  let rows = [];
+  if (st !== 'missing') rows = A.recs.filter(matchRec).filter(r =>
+      !st || (st === 'completed' && r.completed) || (st === 'incomplete' && !r.completed) || (st === 'kmflag' && A.flagged.has(r.id)));
+  if (st === 'missing' || (!st && S.f.missing)) rows = rows.concat(missingRows(A));
+  return rows;
+}
+
+/* ---------- sorting ---------- */
+const COLS = [
+  { k:'id', t:'Prestart #', num:true },
+  { k:'fleet', t:'Fleet #' },
+  { k:'rego', t:'Rego' },
+  { k:'desc', t:'Description' },
+  { k:'date', t:'Date' },
+  { k:'employee', t:'Employee' },
+  { k:'km', t:'Km', num:true, r:true },
+  { k:'delta', t:'Δ km', num:true, r:true },
+  { k:'hours', t:'Hours', num:true, r:true },
+  { k:'status', t:'Status' },
+  { k:'timeTaken', t:'Time taken' },
+  { k:'flag', t:'Km check' }
+];
+function sortVal(r, k, A){
+  switch(k){
+    case 'id': return r.missing ? -1 : idNum(r.id);
+    case 'status': return r.missing ? 0 : r.completed ? 2 : 1;
+    case 'delta': return A.delta.has(r.id) ? A.delta.get(r.id) : null;
+    case 'flag': return A.flags.has(r.id) ? A.flags.get(r.id)[0].label : '';
+    default: return r[k];
+  }
+}
+function sortRows(rows, sort, A){
+  const { key, dir } = sort;
+  return rows.sort((a,b) => {
+    let va = sortVal(a,key,A), vb = sortVal(b,key,A);
+    const na = va == null || va === '', nb = vb == null || vb === '';
+    if (na && nb) {} else if (na) return 1; else if (nb) return -1;
+    else if (va < vb) return -dir; else if (va > vb) return dir;
+    // tie-breakers: date, fleet, id
+    if (a.date !== b.date) return (a.date < b.date ? -1 : 1) * (key === 'date' ? dir : -1);
+    if (a.fleet !== b.fleet) return String(a.fleet).localeCompare(String(b.fleet), undefined, { numeric:true });
+    return idNum(a.id) - idNum(b.id);
+  });
+}
+
+/* ---------- rendering ---------- */
+function render(rebuildOptions){
+  const has = S.records.length > 0;
+  $('#emptyState').hidden = has; $('#app').hidden = !has; $('#filterBar').hidden = !has;
+  ['#btnCsv','#btnJson','#btnClear'].forEach(s => $(s).disabled = !has);
+  if (!has) { $('#dataStatus').textContent = 'No data loaded'; return; }
+  const A = analyse();
+  if (rebuildOptions) buildOptions(A);
+  $('#dataStatus').textContent = `${fmtN(A.recs.length)} prestarts · ${fmtShort(A.minDate)} ${A.minDate.slice(0,4)} – ${fmtShort(A.maxDate)} ${A.maxDate.slice(0,4)}` +
+    (S.meta.lastImport ? ` · last import ${new Date(S.meta.lastImport).toLocaleString('en-AU', { dateStyle:'medium', timeStyle:'short' })}` : '');
+  renderTiles(A);
+  if (S.tab === 'records') renderTable(A);
+  if (S.tab === 'usage') renderUsage(A);
+  if (S.tab === 'km') renderKm(A);
+  if (S.tab === 'cal') renderCal(A);
+}
+
+function buildOptions(A){
+  const fs = $('#fFleet'), es = $('#fEmp');
+  fs.innerHTML = '<option value="">All fleets</option>' + A.fleets.map(f => `<option>${esc(f)}</option>`).join('');
+  es.innerHTML = '<option value="">All employees</option>' + A.employees.map(e => `<option>${esc(e)}</option>`).join('');
+  if (!A.fleets.includes(S.f.fleet)) S.f.fleet = '';
+  if (!A.employees.includes(S.f.emp)) S.f.emp = '';
+  fs.value = S.f.fleet; es.value = S.f.emp;
+  $('#fFrom').min = $('#fTo').min = A.minDate; $('#fFrom').max = $('#fTo').max = A.maxDate;
+  $('#fFrom').value = S.f.from; $('#fTo').value = S.f.to; $('#fStatus').value = S.f.status; $('#fSearch').value = S.f.q; $('#fMissing').checked = S.f.missing;
+  // rules
+  $('#setDays').innerHTML = DOW.map((d,i) => `<label><input type="checkbox" data-d="${i}" ${S.settings.days[i] ? 'checked':''}><span>${d}</span></label>`).join('');
+  $('#setActive').checked = S.settings.activeOnly;
+  $('#setMaxKm').value = S.settings.maxKmPerDay; $('#setSameDay').value = S.settings.sameDayTol; $('#setMinKm').value = S.settings.minKm;
+  document.querySelectorAll('#groupSeg button').forEach(b => b.setAttribute('aria-pressed', b.dataset.g === S.groupBy));
+}
+
+function renderTiles(A){
+  const recs = A.recs.filter(matchRec);
+  const done = recs.filter(r => r.completed).length;
+  const inc = recs.length - done;
+  const miss = missingRows(A).length;
+  const kmf = recs.filter(r => A.flagged.has(r.id)).length;
+  const { from, to } = range(A);
+  const U = usage(S.f.emp ? 'employee' : 'fleet', A, from, to);
+  let exp = 0, ok = 0;
+  for (const g of U.groups) { if (S.f.emp ? g.key !== S.f.emp : (S.f.fleet && g.key !== S.f.fleet)) continue; for (const c of g.cells) if (c.expected) { exp++; if (c.state === 'done') ok++; } }
+  const pct = exp ? Math.round(ok / exp * 100) : 0;
+  $('#tiles').innerHTML = `
+    <div class="tile"><div class="k">Prestarts</div><div class="v num">${fmtN(recs.length)}</div><div class="s">${fmtShort(from)} – ${fmtShort(to)}</div></div>
+    <div class="tile" data-go="completed"><div class="k"><i class="dot" style="background:var(--good)"></i>Completed</div><div class="v num">${fmtN(done)}</div><div class="s">${recs.length ? Math.round(done/recs.length*100) : 0}% of submissions</div></div>
+    <div class="tile" data-go="incomplete"><div class="k"><i class="dot" style="background:var(--warn)"></i>Incomplete</div><div class="v num">${fmtN(inc)}</div><div class="s">started, not finished</div></div>
+    <div class="tile" data-go="missing"><div class="k"><i class="dot" style="background:var(--crit)"></i>Missing days</div><div class="v num">${fmtN(miss)}</div><div class="s">${pct}% of expected days covered</div></div>
+    <div class="tile" data-go="kmflag"><div class="k"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--crit)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>Km discrepancies</div><div class="v num">${fmtN(kmf)}</div><div class="s">readings flagged</div></div>`;
+  $('#cRecords').textContent = fmtN(tableRows(A).length);
+  $('#cUsage').textContent = fmtN(miss); $('#cUsage').classList.toggle('bad', miss > 0);
+  $('#cKm').textContent = fmtN(kmf); $('#cKm').classList.toggle('bad', kmf > 0);
+}
+
+function flagHtml(A, id){
+  const fl = A.flags.get(id); if (!fl) return '';
+  return fl.map(f => `<div class="${f.kind === 'match' ? '' : 'flag'}" title="${esc(f.detail)}">${f.kind === 'match' ? '↔' : '⚠'} ${esc(f.label)}</div>`).join('');
+}
+function statusBadge(r){
+  if (r.missing) return '<span class="badge crit"><i class="dot"></i>Missing</span>';
+  return r.completed ? '<span class="badge good"><i class="dot"></i>Completed</span>' : '<span class="badge warn"><i class="dot"></i>Incomplete</span>';
+}
+
+function headHtml(cols, sort){
+  return '<tr>' + cols.map(c => `<th class="sortable${c.r ? ' r':''}" data-k="${c.k}" aria-sort="${sort.key === c.k ? (sort.dir > 0 ? 'ascending':'descending') : 'none'}">${esc(c.t)} <span class="arr">${sort.key === c.k ? (sort.dir > 0 ? '▲':'▼') : ''}</span></th>`).join('') + '</tr>';
+}
+
+function renderTable(A){
+  const rows = sortRows(tableRows(A), S.sort, A);
+  const pages = Math.max(1, Math.ceil(rows.length / PAGE));
+  if (S.page >= pages) S.page = pages - 1;
+  const slice = rows.slice(S.page * PAGE, S.page * PAGE + PAGE);
+  $('#tbl thead').innerHTML = headHtml(COLS, S.sort);
+  $('#tbl tbody').innerHTML = slice.length ? slice.map(r => {
+    if (r.missing) return `<tr class="row-missing"><td class="muted">—</td><td><b>${esc(r.fleet)}</b></td><td></td><td class="muted">No prestart recorded</td><td>${fmtDate(r.date)}</td><td>${esc(r.employee)}</td><td></td><td></td><td></td><td>${statusBadge(r)}</td><td></td><td></td></tr>`;
+    const fl = A.flagged.has(r.id);
+    const d = A.delta.get(r.id);
+    const cls = fl ? 'row-flag' : (!r.completed ? 'row-incomplete' : '');
+    return `<tr class="${cls}">
+      <td class="num">${esc(r.id)}</td><td><b>${esc(r.fleet)}</b></td><td>${esc(r.rego)}</td><td>${esc(r.desc)}</td>
+      <td>${fmtDate(r.date)}</td><td>${esc(r.employee)}</td>
+      <td class="r num ${fl && r.completed ? 'km-bad' : ''}">${fmtN(r.km)}</td>
+      <td class="r num ${d != null && (d < 0 || d > S.settings.maxKmPerDay) ? 'km-bad' : 'muted'}">${d != null ? (d > 0 ? '+' : '') + fmtN(d) : ''}</td>
+      <td class="r num">${fmtN(r.hours)}</td><td>${statusBadge(r)}</td><td class="muted">${esc(r.timeTaken)}</td><td>${flagHtml(A, r.id)}</td></tr>`;
+  }).join('') : `<tr class="empty-row"><td colspan="${COLS.length}">No records match the filters.</td></tr>`;
+  $('#pager').innerHTML = rows.length > PAGE
+    ? `<span>${fmtN(S.page*PAGE+1)}–${fmtN(Math.min(rows.length,(S.page+1)*PAGE))} of ${fmtN(rows.length)}</span><button class="btn" data-p="-1" ${S.page===0?'disabled':''}>Prev</button><button class="btn" data-p="1" ${S.page>=pages-1?'disabled':''}>Next</button>`
+    : `<span>${fmtN(rows.length)} row${rows.length===1?'':'s'}</span>`;
+}
+
+/* --- usage: weekday chart --- */
+function renderUsage(A){
+  const { from, to } = range(A);
+  const gb = S.groupBy;
+  const U = usage(gb, A, from, to);
+  const selKey = gb === 'fleet' ? S.f.fleet : S.f.emp;
+  // employee filter narrows fleets to the ones that employee used, and vice versa
+  let groups = U.groups;
+  if (selKey) groups = groups.filter(g => g.key === selKey);
+  else if (gb === 'fleet' && S.f.emp) { const fs = new Set(A.recs.filter(r => r.employee === S.f.emp).map(r => r.fleet)); groups = groups.filter(g => fs.has(g.key)); }
+  else if (gb === 'employee' && S.f.fleet) { const es = new Set(A.recs.filter(r => r.fleet === S.f.fleet).map(r => r.employee)); groups = groups.filter(g => es.has(g.key)); }
+
+  const W = DOW.map(() => ({ done:0, inc:0, miss:0, exp:0, subs:0 }));
+  for (const g of groups) for (const c of g.cells) {
+    const w = W[dowOf(c.d)];
+    if (c.state === 'done') w.done++; else if (c.state === 'inc') w.inc++; else if (c.state === 'miss') w.miss++;
+    if (c.expected) w.exp++;
+    w.subs += c.list.length;
+  }
+  $('#wkHint').textContent = `${gb === 'fleet' ? 'Fleet' : 'Employee'}-days, ${fmtShort(from)} – ${fmtShort(to)} · % = completed ÷ expected`;
+  drawWeekChart(W, gb);
+  drawMatrix(groups, U.dates, A);
+}
+
+function drawWeekChart(W, gb){
+  const box = $('#wkChart');
+  const width = Math.max(300, box.clientWidth || 700), height = 250;
+  const m = { l:36, r:8, t:22, b:44 };
+  const iw = width - m.l - m.r, ih = height - m.t - m.b;
+  const max = Math.max(1, ...W.map(w => w.done + w.inc + w.miss));
+  const step = niceStep(max / 4); const top = Math.ceil(max / step) * step;
+  const y = v => m.t + ih - v / top * ih;
+  const bw = Math.min(56, iw / 7 * 0.6);
+  let s = `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Prestart usage by weekday">`;
+  for (let v = 0; v <= top; v += step) s += `<g class="ax"><line x1="${m.l}" x2="${width-m.r}" y1="${y(v)}" y2="${y(v)}" ${v ? 'stroke-dasharray="2 3"' : ''}/><text x="${m.l-6}" y="${y(v)+4}" text-anchor="end">${v}</text></g>`;
+  W.forEach((w, i) => {
+    const cx = m.l + iw / 7 * (i + .5), x = cx - bw/2;
+    let base = 0;
+    const segs = [['done','var(--good)','Completed'],['inc','var(--warn)','Incomplete only'],['miss','var(--crit)','Missing']].filter(([k]) => w[k] > 0);
+    segs.forEach(([k, col], j) => {
+      const v = w[k]; const y0 = y(base), y1 = y(base + v); const isTop = j === segs.length - 1;
+      const h = Math.max(0, y0 - y1 - (j > 0 ? 2 : 0));
+      const yy = y1;
+      s += isTop ? `<path d="${roundTop(x, yy, bw, h, 4)}" fill="${col}"/>` : `<rect x="${x}" y="${yy}" width="${bw}" height="${h}" fill="${col}"/>`;
+      base += v;
+    });
+    const tot = w.done + w.inc + w.miss;
+    if (tot) s += `<text class="lbl" x="${cx}" y="${y(tot)-6}" text-anchor="middle">${tot}</text>`;
+    const pct = w.exp ? Math.round(w.done / w.exp * 100) + '%' : '—';
+    s += `<text class="lbl-strong" x="${cx}" y="${height - m.b + 17}" text-anchor="middle">${DOW[i]}</text>`;
+    s += `<text class="lbl" x="${cx}" y="${height - m.b + 33}" text-anchor="middle">${pct}</text>`;
+    s += `<rect x="${cx - iw/14}" y="${m.t}" width="${iw/7}" height="${ih}" fill="transparent" data-wk="${i}"/>`;
+  });
+  s += '</svg>';
+  box.innerHTML = s;
+  box.onmousemove = e => {
+    const t = e.target.closest('[data-wk]'); if (!t) return hideTip();
+    const i = +t.dataset.wk, w = W[i];
+    showTip(e, `<div class="t">${DOW[i]}</div>
+      <div class="row"><i class="sw" style="background:var(--good)"></i>Completed <b>${w.done}</b></div>
+      <div class="row"><i class="sw" style="background:var(--warn)"></i>Incomplete only <b>${w.inc}</b></div>
+      <div class="row"><i class="sw" style="background:var(--crit)"></i>Missing <b>${w.miss}</b></div>
+      <div class="row">Expected ${gb}-days <b>${w.exp}</b></div>
+      <div class="row">Prestart submissions <b>${w.subs}</b></div>`);
+  };
+  box.onmouseleave = hideTip;
+}
+function niceStep(x){ const p = Math.pow(10, Math.floor(Math.log10(Math.max(x, 1)))); const n = x / p; return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * p; }
+function roundTop(x, y, w, h, r){ r = Math.min(r, h, w/2); return `M${x},${y+h}V${y+r}Q${x},${y} ${x+r},${y}H${x+w-r}Q${x+w},${y} ${x+w},${y+r}V${y+h}Z`; }
+
+/* --- usage: calendar matrix --- */
+let matrixData = null;
+function drawMatrix(groups, dates, A){
+  matrixData = { groups, dates };
+  const el = $('#matrix');
+  if (!groups.length || !dates.length) { el.innerHTML = '<div class="muted">No data in range.</div>'; return; }
+  const wkCls = (d, i) => (i > 0 && dowOf(d) === 0) ? ' wk' : '';
+  let monthRow = '', dayRow = '', dowRow = '', lastM = '';
+  dates.forEach((d, i) => {
+    const m = d.slice(0,7);
+    monthRow += `<div class="mc${wkCls(d,i)}">${m !== lastM ? MON[+d.slice(5,7)-1] + ' ' + d.slice(2,4) : ''}</div>`; lastM = m;
+    const w = dowOf(d);
+    dayRow += `<div class="mc${wkCls(d,i)}${w===0?' mon':''}${S.settings.days[w]?'':' we'}">${+d.slice(8,10)}</div>`;
+    dowRow += `<div class="mc${wkCls(d,i)}${w===0?' mon':''}${S.settings.days[w]?'':' we'}">${'MTWTFSS'[w]}</div>`;
+  });
+  let h = `<div class="mrow mhead mmonth"><div class="mlabel"></div><div class="mcells">${monthRow}</div></div>`;
+  h += `<div class="mrow mhead"><div class="mlabel"></div><div class="mcells">${dowRow}</div></div>`;
+  h += `<div class="mrow mhead"><div class="mlabel"></div><div class="mcells">${dayRow}</div></div>`;
+  groups.forEach((g, gi) => {
+    let exp = 0, ok = 0;
+    const cells = g.cells.map((c, i) => {
+      if (c.expected) { exp++; if (c.state === 'done') ok++; }
+      const label = `${g.key} ${fmtDate(c.d)}: ${c.state === 'done' ? 'completed' : c.state === 'inc' ? 'incomplete only' : c.state === 'miss' ? 'missing' : c.state === 'off' ? 'not expected' : 'inactive'}`;
+      return `<div class="mc ${c.state}${c.list.length ? ' has':''}${c.km ? ' kmf':''}${wkCls(c.d,i)}" data-g="${gi}" data-i="${i}" aria-label="${esc(label)}"></div>`;
+    }).join('');
+    const pct = exp ? Math.round(ok/exp*100) + '%' : '';
+    h += `<div class="mrow"><div class="mlabel" title="${esc(g.key)}"><b>${esc(g.key)}</b><span class="pct">${pct}</span></div><div class="mcells">${cells}</div></div>`;
+  });
+  el.innerHTML = h;
+}
+function matrixTip(e){
+  const c = e.target.closest('.mc[data-g]'); if (!c || !matrixData) return hideTip();
+  const g = matrixData.groups[+c.dataset.g], cell = g.cells[+c.dataset.i];
+  if (cell.state === 'inactive' || (cell.state === 'off' && !cell.list.length)) return showTip(e, `<div class="t">${esc(g.key)} · ${fmtDate(cell.d)}</div><div class="row">${cell.state === 'off' ? 'Not an expected prestart day' : 'Outside active period'}</div>`);
+  const st = { done:['var(--good)','Completed'], inc:['var(--warn)','Incomplete only'], miss:['var(--crit)','Missing — no prestart'], off:['var(--cell-off)','Not expected'] }[cell.state];
+  const A = analyse();
+  let h = `<div class="t">${esc(g.key)} · ${fmtDate(cell.d)}</div><div class="row"><i class="sw" style="background:${st[0]}"></i><b>${st[1]}</b></div>`;
+  for (const r of cell.list.slice(0,6)) {
+    const fl = A.flags.get(r.id);
+    h += `<div class="row" style="margin-top:3px">${r.completed ? '✓' : '○'} ${esc(S.groupBy === 'fleet' ? r.employee : r.fleet)} · ${r.km != null ? fmtN(r.km) + ' km' : ''}${fl ? ` <span class="flag">⚠ ${esc(fl[0].label)}</span>` : ''}</div>`;
+  }
+  if (cell.list.length > 6) h += `<div class="row">+${cell.list.length - 6} more</div>`;
+  showTip(e, h);
+}
+function matrixClick(e){
+  const c = e.target.closest('.mc[data-g]'); if (!c || !matrixData) return;
+  const g = matrixData.groups[+c.dataset.g], cell = g.cells[+c.dataset.i];
+  if (cell.state === 'inactive' || (cell.state === 'off' && !cell.list.length)) return;
+  if (S.groupBy === 'fleet') { S.f.fleet = g.key; S.f.emp = ''; } else { S.f.emp = g.key; S.f.fleet = ''; }
+  S.f.from = S.f.to = cell.d; S.f.status = ''; S.f.missing = true; S.page = 0;
+  syncFilterInputs(); setTab('records');
+}
+
+/* --- calendar tab (week / month) --- */
+let calData = null;
+const lastOfMonth = iso => new Date(Date.UTC(+iso.slice(0,4), +iso.slice(5,7), 0)).toISOString().slice(0,10);
+function localToday(){ const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`; }
+function renderCal(A){
+  const rank = { miss:0, inc:1, done:2 };
+  const byDay = new Map();
+  for (const r of tableRows(A)) {
+    const st = r.missing ? 'miss' : r.completed ? 'done' : 'inc';
+    const key = r.fleet || ('emp:' + r.employee);
+    const label = r.fleet ? (A.rego.get(r.fleet) || r.fleet) : r.employee;
+    if (!byDay.has(r.date)) byDay.set(r.date, new Map());
+    const m = byDay.get(r.date);
+    const e = m.get(key) || { key, label, fleet:r.fleet, employee:r.employee, state:st, recs:[] };
+    if (rank[st] > rank[e.state]) e.state = st;
+    if (!r.missing) e.recs.push(r);
+    m.set(key, e);
+  }
+  const { from, to } = range(A);
+  const mode = S.cal.mode;
+  const anchor = S.cal.anchor || to;
+  let start, end, title, mStart = '', mEnd = '';
+  if (mode === 'week') {
+    start = addDays(anchor, -dowOf(anchor)); end = addDays(start, 6);
+    title = `${+start.slice(8,10)} ${MON[+start.slice(5,7)-1]} – ${+end.slice(8,10)} ${MON[+end.slice(5,7)-1]} ${end.slice(0,4)}`;
+  } else {
+    mStart = anchor.slice(0,8) + '01'; mEnd = lastOfMonth(anchor);
+    start = addDays(mStart, -dowOf(mStart)); end = addDays(mEnd, 6 - dowOf(mEnd));
+    title = new Date(mStart + 'T00:00:00Z').toLocaleString('en-AU', { month:'long', year:'numeric', timeZone:'UTC' });
+  }
+  $('#calTitle').textContent = title;
+  document.querySelectorAll('#calMode button').forEach(b => b.setAttribute('aria-pressed', b.dataset.m === mode));
+  const today = localToday();
+  calData = byDay;
+  let h = DOW.map(d => `<div class="dh">${d}</div>`).join('');
+  for (let d = start; d <= end; d = addDays(d, 1)) {
+    const m = byDay.get(d);
+    const items = m ? [...m.values()].sort((a,b) => (rank[b.state] - rank[a.state]) || a.label.localeCompare(b.label, undefined, { numeric:true })) : [];
+    const out = (mode === 'month' && (d < mStart || d > mEnd)) || d < from || d > to;
+    const done = items.filter(i => i.state === 'done').length;
+    const dlabel = mode === 'week' || +d.slice(8,10) === 1 ? `${+d.slice(8,10)} ${MON[+d.slice(5,7)-1]}` : +d.slice(8,10);
+    h += `<div class="day${out ? ' out':''}${S.settings.days[dowOf(d)] ? '' : ' off'}${d === today ? ' today':''}">
+      <div class="dn" data-date="${d}" title="Open records for ${fmtDate(d)}"><b>${dlabel}</b>${done ? `<span class="cnt">${done} ✓</span>` : ''}</div>
+      <div class="chips">${items.map(i => `<i class="chip ${i.state}" data-d="${d}" data-k="${esc(i.key)}">${esc(i.label)}</i>`).join('')}</div></div>`;
+  }
+  const el = $('#cal');
+  el.className = 'cal ' + mode;
+  el.innerHTML = h;
+}
+function calTip(e){
+  const c = e.target.closest('.chip[data-d]'); if (!c || !calData) return hideTip();
+  const it = calData.get(c.dataset.d)?.get(c.dataset.k); if (!it) return hideTip();
+  const st = { done:['#087a08','Completed prestart'], inc:['var(--warn)','Incomplete only'], miss:['var(--crit)','Missing — no prestart'] }[it.state];
+  let h = `<div class="t">${esc(it.label)}${it.fleet && it.fleet !== it.label ? ` <span class="muted">· ${esc(it.fleet)}</span>` : ''}</div><div class="row">${fmtDate(c.dataset.d)}</div><div class="row"><i class="sw" style="background:${st[0]}"></i><b>${st[1]}</b></div>`;
+  for (const r of it.recs.slice(0,5)) h += `<div class="row" style="margin-top:3px">${r.completed ? '✓' : '○'} ${esc(r.employee)}${r.km != null ? ' · ' + fmtN(r.km) + ' km' : ''}${r.timeTaken ? ' · ' + esc(r.timeTaken) : ''}</div>`;
+  showTip(e, h);
+}
+
+/* --- km tab --- */
+function renderKm(A){
+  const { from, to } = range(A);
+  let fleets = A.fleets;
+  if (S.f.fleet) fleets = fleets.filter(f => f === S.f.fleet);
+  if (S.f.emp) { const fs = new Set(A.recs.filter(r => r.employee === S.f.emp).map(r => r.fleet)); fleets = fleets.filter(f => fs.has(f)); }
+  const mult = $('#multiples');
+  const charts = [];
+  mult.innerHTML = fleets.map((fl, i) => {
+    const pts = (A.series.get(fl) || []).filter(p => p.r.date >= from && p.r.date <= to);
+    const flaggedHere = A.recs.filter(r => r.fleet === fl && matchRec(r) && A.flagged.has(r.id)).length;
+    const okPts = pts.filter(p => p.ok);
+    const travelled = okPts.length > 1 ? okPts[okPts.length-1].r.km - okPts[0].r.km : 0;
+    charts.push({ fl, pts });
+    return `<div class="mini"><div class="mini-h"><b>${esc(fl)}</b><span class="s">${okPts.length ? fmtN(travelled) + ' km travelled' : 'no readings'}</span>${flaggedHere ? `<span class="bad">⚠ ${flaggedHere} flagged</span>` : '<span class="ok">✓ no issues</span>'}</div><div class="chart-box" data-c="${i}"></div></div>`;
+  }).join('') || '<div class="muted">No fleets match the filters.</div>';
+  charts.forEach((c, i) => drawOdo(mult.querySelector(`[data-c="${i}"]`), c.pts, from, to));
+
+  // flagged table
+  const rows = A.recs.filter(r => matchRec(r) && A.flagged.has(r.id));
+  const cols = [
+    { k:'fleet', t:'Fleet #' }, { k:'date', t:'Date' }, { k:'employee', t:'Employee' }, { k:'id', t:'Prestart #', num:true },
+    { k:'km', t:'Km', num:true, r:true }, { k:'delta', t:'Δ km', num:true, r:true }, { k:'hours', t:'Hours', num:true, r:true }, { k:'flag', t:'Issue' }, { k:'detail', t:'Detail' }
+  ];
+  sortRows(rows, S.kmSort.key === 'detail' ? { key:'flag', dir:S.kmSort.dir } : S.kmSort, A);
+  $('#kmTbl thead').innerHTML = headHtml(cols, S.kmSort);
+  $('#kmTbl tbody').innerHTML = rows.length ? rows.map(r => {
+    const fl = A.flags.get(r.id); const d = A.delta.get(r.id);
+    return `<tr><td><b>${esc(r.fleet)}</b></td><td>${fmtDate(r.date)}</td><td>${esc(r.employee)}</td><td class="num">${esc(r.id)}</td>
+      <td class="r num km-bad">${fmtN(r.km)}</td><td class="r num">${d != null ? (d > 0 ? '+' : '') + fmtN(d) : ''}</td><td class="r num">${fmtN(r.hours)}</td>
+      <td>${flagHtml(A, r.id)}</td><td class="wrap-cell muted">${fl.map(f => esc(f.detail)).join('<br>')}</td></tr>`;
+  }).join('') : `<tr class="empty-row"><td colspan="${cols.length}">No km discrepancies for the current filters.</td></tr>`;
+  $('#kmHint').textContent = `${rows.length} reading${rows.length===1?'':'s'} · checks: blank km, km lower than previous, jump over ${fmtN(S.settings.maxKmPerDay)} km/day, same-day conflicts over ${fmtN(S.settings.sameDayTol)} km`;
+}
+
+function drawOdo(box, pts, from, to){
+  const width = Math.max(260, box.clientWidth || 320), height = 150;
+  const m = { l:52, r:10, t:10, b:22 };
+  const iw = width - m.l - m.r, ih = height - m.t - m.b;
+  if (!pts.length) { box.innerHTML = `<svg viewBox="0 0 ${width} ${height}"><text class="lbl" x="${width/2}" y="${height/2}" text-anchor="middle">No completed readings in range</text></svg>`; return; }
+  const okKm = pts.filter(p => p.ok).map(p => p.r.km);
+  let lo = Math.min(...(okKm.length ? okKm : pts.map(p => p.r.km))), hi = Math.max(...(okKm.length ? okKm : pts.map(p => p.r.km)));
+  if (hi === lo) { hi += 100; lo -= 100; }
+  const padK = (hi - lo) * 0.12; lo -= padK; hi += padK;
+  const span = Math.max(1, daysBetween(from, to));
+  const x = d => m.l + daysBetween(from, d) / span * iw;
+  const y = v => m.t + ih - (v - lo) / (hi - lo) * ih;
+  let s = `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Odometer readings">`;
+  const step = niceStep((hi - lo) / 3);
+  for (let v = Math.ceil(lo / step) * step; v <= hi; v += step) s += `<line class="gridline" x1="${m.l}" x2="${width-m.r}" y1="${y(v)}" y2="${y(v)}"/><text class="lbl" x="${m.l-6}" y="${y(v)+4}" text-anchor="end">${v >= 10000 ? fmtN(Math.round(v/1000)) + 'k' : fmtN(v)}</text>`;
+  s += `<g class="ax"><line x1="${m.l}" x2="${width-m.r}" y1="${m.t+ih}" y2="${m.t+ih}"/></g>`;
+  s += `<text class="lbl" x="${m.l}" y="${height-6}">${fmtShort(from)}</text><text class="lbl" x="${width-m.r}" y="${height-6}" text-anchor="end">${fmtShort(to)}</text>`;
+  // accepted line, broken at sequence resets
+  let path = '';
+  pts.forEach(p => { if (!p.ok) return; path += (path && !p.reset ? 'L' : 'M') + x(p.r.date).toFixed(1) + ',' + y(p.r.km).toFixed(1); });
+  s += `<path class="line" d="${path}"/>`;
+  const A = analyse();
+  pts.forEach((p, i) => {
+    const flagged = A.flagged.has(p.r.id);
+    const px = x(p.r.date); let py = y(p.r.km);
+    if (!flagged) { s += `<circle class="pt" cx="${px}" cy="${py}" r="2"/>`; }
+    else if (py < m.t) s += `<path class="pt-bad" d="M${px-5},${m.t+6} L${px},${m.t-3} L${px+5},${m.t+6}Z"/>`;
+    else if (py > m.t + ih) s += `<path class="pt-bad" d="M${px-5},${m.t+ih-6} L${px},${m.t+ih+3} L${px+5},${m.t+ih-6}Z"/>`;
+    else s += `<circle class="pt-bad" cx="${px}" cy="${py}" r="4.5"/>`;
+    s += `<circle cx="${px}" cy="${Math.min(Math.max(py, m.t), m.t+ih)}" r="9" fill="transparent" data-i="${i}"/>`;
+  });
+  s += '</svg>';
+  box.innerHTML = s;
+  box.onmousemove = e => {
+    const t = e.target.closest('[data-i]'); if (!t) return hideTip();
+    const p = pts[+t.dataset.i], fl = A.flags.get(p.r.id), d = A.delta.get(p.r.id);
+    showTip(e, `<div class="t">${esc(p.r.fleet)} · ${fmtDate(p.r.date)}</div>
+      <div class="row">Km <b>${fmtN(p.r.km)}</b>${d != null ? ` <span class="muted">(${d > 0 ? '+' : ''}${fmtN(d)})</span>` : ''}</div>
+      <div class="row">${esc(p.r.employee)} · #${esc(p.r.id)}</div>
+      ${fl ? fl.map(f => `<div class="row" style="margin-top:3px"><span class="${f.kind==='match'?'':'flag'}">${f.kind==='match'?'↔':'⚠'} ${esc(f.label)}</span></div><div class="row" style="font-size:11px">${esc(f.detail)}</div>`).join('') : ''}`);
+  };
+  box.onmouseleave = hideTip;
+}
+
+/* ---------- tooltip / toast ---------- */
+const tip = $('#tip');
+function showTip(e, html){
+  tip.innerHTML = html; tip.style.display = 'block';
+  const r = tip.getBoundingClientRect();
+  let x = e.clientX + 14, y = e.clientY + 14;
+  if (x + r.width > innerWidth - 8) x = e.clientX - r.width - 14;
+  if (y + r.height > innerHeight - 8) y = e.clientY - r.height - 14;
+  tip.style.left = Math.max(8, x) + 'px'; tip.style.top = Math.max(8, y) + 'px';
+}
+function hideTip(){ tip.style.display = 'none'; }
+let toastT;
+function toast(msg, err){ const t = $('#toast'); t.textContent = msg; t.className = 'toast show' + (err ? ' err' : ''); clearTimeout(toastT); toastT = setTimeout(() => t.className = 'toast', err ? 6000 : 3800); }
+
+/* ---------- export ---------- */
+function download(name, text, type){
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type })); a.download = name;
+  document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+}
+function exportCsv(){
+  const A = analyse();
+  const rows = sortRows(tableRows(A), S.sort, A);
+  const q = v => { const s = String(v ?? ''); return /[",\n]/.test(s) ? '"' + s.replace(/"/g,'""') + '"' : s; };
+  const head = ['Groups','SubGroups','Prestart #','Fleet #','Registration','Description','Date','Weekday','Employee','Employee #','Kilometres','Km change','Hours','Type','Status','Time taken','Gearbox Entry','Km issue','Km issue detail'];
+  const lines = [head.join(',')];
+  for (const r of rows) {
+    const fl = A.flags.get(r.id) || [];
+    const d = r.date ? `${r.date.slice(8,10)}/${r.date.slice(5,7)}/${r.date.slice(0,4)}` : '';
+    lines.push([r.group, r.subgroup, r.id, r.fleet, r.rego, r.desc, d, r.date ? DOW[dowOf(r.date)] : '', r.employee, r.empNo, r.km, A.delta.get(r.id), r.hours, r.type,
+      r.missing ? 'Missing' : r.completed ? 'Completed' : 'Incomplete', r.timeTaken, r.missing ? '' : r.gearbox,
+      fl.map(f => f.label).join('; '), fl.map(f => f.detail).join(' | ')].map(q).join(','));
+  }
+  download(`prestarts_${new Date().toISOString().slice(0,10)}.csv`, '﻿' + lines.join('\r\n'), 'text/csv');
+}
+function exportJson(){
+  download(`prestart_backup_${new Date().toISOString().slice(0,10)}.json`, JSON.stringify({ exported:new Date().toISOString(), settings:S.settings, records:S.records }), 'application/json');
+}
+
+/* ---------- events ---------- */
+function syncFilterInputs(){
+  $('#fFleet').value = S.f.fleet; $('#fEmp').value = S.f.emp; $('#fFrom').value = S.f.from; $('#fTo').value = S.f.to;
+  $('#fStatus').value = S.f.status; $('#fSearch').value = S.f.q; $('#fMissing').checked = S.f.missing;
+}
+function setTab(t){
+  S.tab = t;
+  document.querySelectorAll('.tab').forEach(b => b.setAttribute('aria-selected', b.dataset.tab === t));
+  document.querySelectorAll('.panel').forEach(p => p.classList.toggle('on', p.id === 'p-' + t));
+  render();
+}
+function onFilter(){
+  S.f = { fleet:$('#fFleet').value, emp:$('#fEmp').value, from:$('#fFrom').value, to:$('#fTo').value, status:$('#fStatus').value, q:$('#fSearch').value.trim(), missing:$('#fMissing').checked };
+  S.page = 0; render();
+}
+['#fFleet','#fEmp','#fFrom','#fTo','#fStatus','#fMissing'].forEach(s => $(s).addEventListener('change', onFilter));
+let qT; $('#fSearch').addEventListener('input', () => { clearTimeout(qT); qT = setTimeout(onFilter, 200); });
+$('#btnReset').addEventListener('click', () => { S.f = { fleet:'', emp:'', from:'', to:'', status:'', q:'', missing:true }; syncFilterInputs(); S.page = 0; render(); });
+document.querySelectorAll('.tab').forEach(b => b.addEventListener('click', () => setTab(b.dataset.tab)));
+$('#tiles').addEventListener('click', e => {
+  const t = e.target.closest('[data-go]'); if (!t) return;
+  S.f.status = t.dataset.go; syncFilterInputs(); S.page = 0;
+  setTab(t.dataset.go === 'kmflag' ? 'km' : t.dataset.go === 'missing' ? 'usage' : 'records');
+});
+$('#tbl thead').addEventListener('click', e => { const th = e.target.closest('th[data-k]'); if (!th) return; const k = th.dataset.k; S.sort = { key:k, dir: S.sort.key === k ? -S.sort.dir : (k === 'date' ? -1 : 1) }; renderTable(analyse()); });
+$('#kmTbl thead').addEventListener('click', e => { const th = e.target.closest('th[data-k]'); if (!th) return; const k = th.dataset.k; S.kmSort = { key:k, dir: S.kmSort.key === k ? -S.kmSort.dir : (k === 'date' ? -1 : 1) }; renderKm(analyse()); });
+$('#pager').addEventListener('click', e => { const b = e.target.closest('[data-p]'); if (!b) return; S.page += +b.dataset.p; renderTable(analyse()); $('#tbl').scrollIntoView({ block:'nearest' }); });
+$('#groupSeg').addEventListener('click', e => { const b = e.target.closest('[data-g]'); if (!b) return; S.groupBy = b.dataset.g; document.querySelectorAll('#groupSeg button').forEach(x => x.setAttribute('aria-pressed', x === b)); save(); renderUsage(analyse()); });
+$('#matrix').addEventListener('mousemove', matrixTip);
+$('#matrix').addEventListener('mouseleave', hideTip);
+$('#matrix').addEventListener('click', matrixClick);
+// calendar
+$('#calMode').addEventListener('click', e => { const b = e.target.closest('[data-m]'); if (!b) return; S.cal.mode = b.dataset.m; save(); renderCal(analyse()); });
+$('#p-cal .calnav').addEventListener('click', e => {
+  const b = e.target.closest('[data-nav]'); if (!b) return;
+  const n = +b.dataset.nav, A = analyse();
+  if (!n) S.cal.anchor = null;
+  else {
+    const cur = S.cal.anchor || range(A).to;
+    if (S.cal.mode === 'week') S.cal.anchor = addDays(cur, 7 * n);
+    else { const y = +cur.slice(0,4), m = +cur.slice(5,7) - 1 + n; S.cal.anchor = new Date(Date.UTC(y, m, 1)).toISOString().slice(0,10); }
+  }
+  renderCal(A);
+});
+$('#cal').addEventListener('mousemove', calTip);
+$('#cal').addEventListener('mouseleave', hideTip);
+$('#cal').addEventListener('click', e => {
+  const d = e.target.closest('.dn[data-date]'); if (!d) return;
+  S.f.from = S.f.to = d.dataset.date; S.page = 0; syncFilterInputs(); setTab('records');
+});
+// rules
+function onRules(){
+  const n = (s, d) => { const v = parseFloat($(s).value); return isNaN(v) ? d : v; };
+  S.settings = {
+    days: [...document.querySelectorAll('#setDays input')].map(i => i.checked ? 1 : 0),
+    activeOnly: $('#setActive').checked,
+    maxKmPerDay: Math.max(50, n('#setMaxKm', DEFAULT_SETTINGS.maxKmPerDay)),
+    sameDayTol: Math.max(0, n('#setSameDay', DEFAULT_SETTINGS.sameDayTol)),
+    minKm: Math.max(0, n('#setMinKm', DEFAULT_SETTINGS.minKm))
+  };
+  S.A = null; save(); render();
+}
+$('#rules').addEventListener('change', onRules);
+// import / export
+$('#fileIn').addEventListener('change', e => { const fs = [...e.target.files]; e.target.value = ''; if (fs.length) importFiles(fs); });
+$('#btnCsv').addEventListener('click', exportCsv);
+$('#btnJson').addEventListener('click', exportJson);
+$('#btnClear').addEventListener('click', () => {
+  if (!confirm('Remove all prestart data stored in this browser? (Make a Backup first if you need it.)')) return;
+  S.records = []; S.meta = { lastImport:null, files:[] }; S.A = null; save(); render(true);
+});
+// drag & drop
+let dragN = 0;
+addEventListener('dragenter', e => { if ([...(e.dataTransfer?.types||[])].includes('Files')) { dragN++; $('#dropOv').classList.add('on'); } });
+addEventListener('dragleave', () => { if (--dragN <= 0) { dragN = 0; $('#dropOv').classList.remove('on'); } });
+addEventListener('dragover', e => e.preventDefault());
+addEventListener('drop', e => { e.preventDefault(); dragN = 0; $('#dropOv').classList.remove('on'); const fs = [...(e.dataTransfer?.files||[])]; if (fs.length) importFiles(fs); });
+let rT; addEventListener('resize', () => { clearTimeout(rT); rT = setTimeout(() => { if (S.records.length && S.tab !== 'records') render(); }, 150); });
+
+/* ---------- boot ---------- */
+load();
+render(true);
+})();
+</script>
+</body>
+</html>
