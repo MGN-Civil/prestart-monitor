@@ -254,20 +254,39 @@ def handle_webhook(event):
 
 
 # ---------------------------------------------------------------- Gearbox API (vehicles)
+UA = 'MGN-Prestart-Monitor/1.0 (+https://prestart.mgncivil.com.au)'
+
+
+class GearboxError(Exception):
+    pass
+
+
+def _http_error(e, what):
+    try:
+        body = e.read().decode('utf-8', 'replace')[:400]
+    except Exception:
+        body = ''
+    return GearboxError(f'{what}: HTTP {e.code} {body}'.strip())
+
+
 def gearbox_token():
     s = secret()
-    data = urllib.parse.urlencode({'grant_type': 'client_credentials', 'client_id': s['client_id'],
-                                   'client_secret': s['client_secret'], 'business_token': s.get('business_token', '')}).encode()
+    data = urllib.parse.urlencode({'grant_type': 'client_credentials', 'client_id': s['client_id'].strip(),
+                                   'client_secret': s['client_secret'].strip(),
+                                   'business_token': s.get('business_token', '').strip()}).encode()
     req = urllib.request.Request(GEARBOX + '/oauth/token', data=data, method='POST',
-                                 headers={'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json'})
-    with urllib.request.urlopen(req, timeout=20) as r:
-        return json.loads(r.read())['access_token']
+                                 headers={'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json', 'User-Agent': UA})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            return json.loads(r.read())['access_token']
+    except urllib.error.HTTPError as e:
+        raise _http_error(e, 'Gearbox token request failed')
 
 
 def gearbox_get_all(path, key, token):
     url, out = GEARBOX + path, []
     for _ in range(200):
-        req = urllib.request.Request(url, headers={'Authorization': f'Bearer {token}', 'Accept': 'application/json'})
+        req = urllib.request.Request(url, headers={'Authorization': f'Bearer {token}', 'Accept': 'application/json', 'User-Agent': UA})
         try:
             with urllib.request.urlopen(req, timeout=30) as r:
                 body = json.loads(r.read())
@@ -276,7 +295,7 @@ def gearbox_get_all(path, key, token):
             if e.code == 429:
                 time.sleep(int(e.headers.get('Retry-After') or 15))
                 continue
-            raise
+            raise _http_error(e, f'Gearbox GET {path} failed')
         out += body.get(key, []) if isinstance(body, dict) else body
         m = re.search(r'<([^>]+)>;\s*rel="next"', link)
         if not m:
