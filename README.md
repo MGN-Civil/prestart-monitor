@@ -10,7 +10,7 @@ The page is a single `index.html` with no build step. Hosted at https://prestart
 |---|---|
 | **Import / update** | Load a Gearbox export (`.xlsx`, `.xls`, `.csv`) or a JSON backup. Rows are merged by **Prestart #**: new prestarts are added and existing ones updated, so you can import each new export over the old data. Drag-and-drop works anywhere on the page. |
 | **Filters** | Fleet #, Employee, date range, status (completed / incomplete / missing / km discrepancies), free-text search and *Show missing days*. They apply to every tab. |
-| **Records** | A sortable table (click any column header). Incomplete prestarts, missing days and km issues are highlighted. Missing days appear as rows of their own. |
+| **Records** | A sortable table (click any column header). Incomplete prestarts, missing days and km issues are highlighted. Missing days appear as rows of their own. A **Comments** column lets you note anything against a prestart or a missing day (Enter to save, Shift+Enter for a new line). In live mode comments are shared and show who wrote them and when; *Show → Has comment* lists them. |
 | **Usage by day** | A Mon–Sun stacked bar chart (completed / incomplete only / missing, with % coverage) and a day-by-day calendar heatmap by fleet or by employee. Click a day to open its records. |
 | **Calendar** | Week and Month views listing each vehicle's **rego** per day. Green = completed prestart, grey outline = incomplete, red struck-through = missing. Uses the same filters, e.g. *Show → Completed* for green regos only. |
 | **Km discrepancies** | An odometer chart for each fleet plus a table of flagged readings, each with a plain-English reason. |
@@ -71,7 +71,7 @@ The Gearbox public API cannot *read* prestarts (the endpoint is create-only), so
 
 **Webhook security.** `REQUIRE_SIGNATURE=true` rejects deliveries whose `X-Gearbox-Signature` doesn't match `webhook_signing_key`.
 
-API routes: `GET /prestarts`, `POST /prestarts/import`, `POST /vehicles/sync` (all need a Microsoft sign-in from an `@mgncivil.com.au` account), and `POST /webhook/{token}` (Gearbox only, secret path token + HMAC signature).
+API routes: `GET /prestarts` (includes comments), `POST /comments` (`{key, text}`; empty text deletes), `POST /prestarts/import`, `POST /vehicles/sync` (all need a Microsoft sign-in from an `@mgncivil.com.au` account), and `POST /webhook/{token}` (Gearbox only, secret path token + HMAC signature).
 
 ### One-off setup
 

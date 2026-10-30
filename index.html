@@ -139,6 +139,16 @@ tr.row-flag td:first-child{box-shadow:inset 3px 0 0 var(--crit)}
 .flag{color:var(--crit);font-weight:600}
 .km-bad{color:var(--crit);font-weight:650}
 .muted{color:var(--text-3)}
+td.cm{white-space:normal;min-width:200px;max-width:340px;cursor:pointer}
+td.cm:hover .cm-text{color:var(--accent-ink)}
+.cm-text{white-space:pre-wrap;word-break:break-word;line-height:1.35}
+.cm-meta{font-size:11px;color:var(--text-3);margin-top:2px}
+.cm-add{border:1px dashed var(--border-strong);background:none;border-radius:6px;padding:1px 8px;font-size:12px;color:var(--text-3);cursor:pointer;opacity:.7}
+tr:hover .cm-add{opacity:1}
+.cm-add:hover{color:var(--accent-ink);border-color:var(--accent)}
+.cm-input{width:100%;min-width:220px;font:inherit;font-size:13px;border:1px solid var(--accent);border-radius:6px;padding:5px 7px;background:var(--surface);color:var(--text);resize:vertical}
+.cm-actions{display:flex;gap:6px;margin-top:5px}
+.btn.sm{height:26px;padding:0 9px;font-size:12px}
 .pager{display:flex;align-items:center;gap:10px;justify-content:flex-end;padding:10px 16px;color:var(--text-2);font-size:13px;flex-wrap:wrap}
 .empty-row td{text-align:center;color:var(--text-3);padding:28px}
 
@@ -305,6 +315,7 @@ details.rules[open] summary::before{transform:rotate(90deg)}
         <option value="incomplete">Incomplete</option>
         <option value="missing">Missing days only</option>
         <option value="kmflag">Km discrepancies</option>
+        <option value="comment">Has comment</option>
       </select>
     </div>
     <div class="field search"><label for="fSearch">Search</label><input type="search" id="fSearch" placeholder="Rego, description, prestart #…"></div>
@@ -486,7 +497,7 @@ const idNum = id => { const n = parseFloat(id); return isNaN(n) ? Infinity : n; 
 
 /* ---------- storage ---------- */
 function save(){
-  try { localStorage.setItem(STORE_KEY, JSON.stringify({ records: SERVER ? [] : S.records, meta: SERVER ? {} : S.meta, settings:S.settings, groupBy:S.groupBy, calMode:S.cal.mode })); }
+  try { localStorage.setItem(STORE_KEY, JSON.stringify({ records: SERVER ? [] : S.records, meta: SERVER ? {} : S.meta, settings:S.settings, groupBy:S.groupBy, calMode:S.cal.mode, comments: SERVER ? {} : S.comments })); }
   catch(e){ toast('Could not save to browser storage – data will be lost on reload. Use Backup.', true); }
 }
 function load(){
@@ -498,6 +509,7 @@ function load(){
     if (d.settings) S.settings = { ...DEFAULT_SETTINGS, ...d.settings };
     if (d.groupBy) S.groupBy = d.groupBy;
     if (d.calMode === 'week' || d.calMode === 'month') S.cal.mode = d.calMode;
+    if (!SERVER && d.comments && typeof d.comments === 'object') S.comments = d.comments;
   } catch(e){ /* storage unavailable */ }
 }
 
@@ -570,6 +582,7 @@ async function readFile(file){
   if (name.endsWith('.json')) {
     const j = JSON.parse(await file.text());
     const arr = Array.isArray(j) ? j : (j.records || []);
+    if (!SERVER && j && j.comments && typeof j.comments === 'object') Object.assign(S.comments, j.comments);
     return arr.map(x => (x && x.fleet !== undefined && x.date && /^\d{4}-/.test(x.date)) ? { ...x, id:String(x.id) } : normalise(x));
   }
   if (!window.XLSX) throw new Error('Spreadsheet reader failed to load (needs internet access to cdnjs.cloudflare.com). JSON backups still import.');
@@ -692,6 +705,7 @@ async function loadServer(quiet){
     S.server.user = d.user || ''; S.server.updatedAt = d.updatedAt || ''; S.server.loadedAt = new Date();
     const tc = s => s.replace(/\b\w/g, c => c.toUpperCase());
     S.server.scope = Object.values(d.filter || {}).map(v => v.map(tc).join(' / ')).join(' · ');
+    S.comments = d.comments || {};
     S.A = null; render(true);
   } catch(e) { console.error(e); S.server.error = e.message; toast(e.message, true); render(true); }
   finally { S.server.loading = false; }
@@ -851,7 +865,7 @@ function matchRec(r){
   if (f.to && r.date > f.to) return false;
   if (f.q) {
     const q = f.q.toLowerCase();
-    if (![r.id, r.fleet, r.rego, r.desc, r.employee, r.group, r.timeTaken, r.km].some(v => String(v ?? '').toLowerCase().includes(q))) return false;
+    if (![r.id, r.fleet, r.rego, r.desc, r.employee, r.group, r.timeTaken, r.km, (S.comments[String(r.id)] || {}).text].some(v => String(v ?? '').toLowerCase().includes(q))) return false;
   }
   return true;
 }
@@ -864,7 +878,7 @@ function missingRows(A){
     if (byEmp ? g.key !== S.f.emp : (S.f.fleet && g.key !== S.f.fleet)) continue;
     for (const c of g.cells) if (c.state === 'miss') rows.push({ missing:true, id:'', fleet: byEmp ? '' : g.key, employee: byEmp ? g.key : '', date:c.d, rego:'', desc:'' });
   }
-  if (S.f.q) { const q = S.f.q.toLowerCase(); return rows.filter(r => (r.fleet + ' ' + r.employee + ' missing').toLowerCase().includes(q)); }
+  if (S.f.q) { const q = S.f.q.toLowerCase(); return rows.filter(r => (r.fleet + ' ' + r.employee + ' missing ' + ((commentOf(r) || {}).text || '')).toLowerCase().includes(q)); }
   return rows;
 }
 
@@ -872,9 +886,48 @@ function tableRows(A){
   const st = S.f.status;
   let rows = [];
   if (st !== 'missing') rows = A.recs.filter(matchRec).filter(r =>
-      !st || (st === 'completed' && r.completed) || (st === 'incomplete' && !r.completed) || (st === 'kmflag' && A.flagged.has(r.id)));
-  if (st === 'missing' || (!st && S.f.missing)) rows = rows.concat(missingRows(A));
+      !st || st === 'comment' || (st === 'completed' && r.completed) || (st === 'incomplete' && !r.completed) || (st === 'kmflag' && A.flagged.has(r.id)));
+  if (st === 'missing' || st === 'comment' || (!st && S.f.missing)) rows = rows.concat(missingRows(A));
+  if (st === 'comment') rows = rows.filter(r => commentOf(r));
   return rows;
+}
+
+/* ---------- comments ---------- */
+S.comments = S.comments || {};
+const commentKey = r => r.missing ? `missing#${r.fleet || 'emp:' + r.employee}#${r.date}` : String(r.id);
+const commentOf = r => S.comments[commentKey(r)] || null;
+function commentCell(r){
+  const k = commentKey(r), c = S.comments[k];
+  if (!c) return `<td class="cm" data-ck="${esc(k)}"><button class="cm-add" type="button">+ Add</button></td>`;
+  const who = c.by ? c.by.split('@')[0].replace(/[._]/g, ' ').replace(/\b\w/g, x => x.toUpperCase()) : '';
+  const when = c.at ? new Date(c.at).toLocaleString('en-AU', { day:'numeric', month:'short', hour:'numeric', minute:'2-digit' }) : '';
+  return `<td class="cm" data-ck="${esc(k)}"><div class="cm-text" title="Click to edit">${esc(c.text)}</div>${who || when ? `<div class="cm-meta">${esc([who, when].filter(Boolean).join(' · '))}</div>` : ''}</td>`;
+}
+function openCommentEditor(td){
+  if (td.querySelector('textarea')) return;
+  const k = td.dataset.ck, cur = (S.comments[k] || {}).text || '';
+  td.innerHTML = `<textarea class="cm-input" rows="2" maxlength="2000" placeholder="Add a comment…">${esc(cur)}</textarea>
+    <div class="cm-actions"><button class="btn primary sm" data-cm="save" type="button">Save</button><button class="btn sm" data-cm="cancel" type="button">Cancel</button>${cur ? '<button class="btn ghost sm" data-cm="delete" type="button">Delete</button>' : ''}</div>`;
+  const ta = td.querySelector('textarea'); ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length);
+  ta.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); saveComment(td, ta.value); }
+    if (e.key === 'Escape') renderTable(analyse());
+  });
+}
+async function saveComment(td, text){
+  const k = td.dataset.ck; text = text.trim();
+  td.querySelectorAll('button').forEach(b => b.disabled = true);
+  try {
+    if (SERVER) {
+      const res = await api('/comments', { method:'POST', headers:{ 'Content-Type':'application/json' }, body:JSON.stringify({ key:k, text }) });
+      if (res.deleted) delete S.comments[k]; else S.comments[k] = { text:res.text, by:res.by, at:res.at };
+    } else {
+      if (text) S.comments[k] = { text, by:'', at:new Date().toISOString() }; else delete S.comments[k];
+      save();
+    }
+    toast(text ? 'Comment saved' : 'Comment removed');
+  } catch(e) { console.error(e); toast(e.message || 'Could not save comment', true); }
+  renderTable(analyse());
 }
 
 /* ---------- sorting ---------- */
@@ -890,7 +943,8 @@ const COLS = [
   { k:'hours', t:'Hours', num:true, r:true },
   { k:'status', t:'Status' },
   { k:'timeTaken', t:'Time taken' },
-  { k:'flag', t:'Km check' }
+  { k:'flag', t:'Km check' },
+  { k:'comment', t:'Comments' }
 ];
 function sortVal(r, k, A){
   switch(k){
@@ -898,6 +952,7 @@ function sortVal(r, k, A){
     case 'status': return r.missing ? 0 : r.completed ? 2 : 1;
     case 'delta': return A.delta.has(r.id) ? A.delta.get(r.id) : null;
     case 'flag': return A.flags.has(r.id) ? A.flags.get(r.id)[0].label : '';
+    case 'comment': return (commentOf(r) || {}).text || '';
     default: return r[k];
   }
 }
@@ -1011,7 +1066,7 @@ function renderTable(A){
   const slice = rows.slice(S.page * PAGE, S.page * PAGE + PAGE);
   $('#tbl thead').innerHTML = headHtml(COLS, S.sort);
   $('#tbl tbody').innerHTML = slice.length ? slice.map(r => {
-    if (r.missing) return `<tr class="row-missing"><td class="muted">—</td><td><b>${esc(r.fleet)}</b></td><td></td><td class="muted">No prestart recorded</td><td>${fmtDate(r.date)}</td><td>${esc(r.employee)}</td><td></td><td></td><td></td><td>${statusBadge(r)}</td><td></td><td></td></tr>`;
+    if (r.missing) return `<tr class="row-missing"><td class="muted">—</td><td><b>${esc(r.fleet)}</b></td><td></td><td class="muted">No prestart recorded</td><td>${fmtDate(r.date)}</td><td>${esc(r.employee)}</td><td></td><td></td><td></td><td>${statusBadge(r)}</td><td></td><td></td>${commentCell(r)}</tr>`;
     const fl = A.flagged.has(r.id);
     const d = A.delta.get(r.id);
     const cls = fl ? 'row-flag' : (!r.completed ? 'row-incomplete' : '');
@@ -1020,7 +1075,7 @@ function renderTable(A){
       <td>${fmtDate(r.date)}</td><td>${esc(r.employee)}</td>
       <td class="r num ${fl && r.completed ? 'km-bad' : ''}">${fmtN(r.km)}</td>
       <td class="r num ${d != null && (d < 0 || d > S.settings.maxKmPerDay) ? 'km-bad' : 'muted'}">${d != null ? (d > 0 ? '+' : '') + fmtN(d) : ''}</td>
-      <td class="r num">${fmtN(r.hours)}</td><td>${statusBadge(r)}</td><td class="muted">${esc(r.timeTaken)}</td><td>${flagHtml(A, r.id)}</td></tr>`;
+      <td class="r num">${fmtN(r.hours)}</td><td>${statusBadge(r)}</td><td class="muted">${esc(r.timeTaken)}</td><td>${flagHtml(A, r.id)}</td>${commentCell(r)}</tr>`;
   }).join('') : `<tr class="empty-row"><td colspan="${COLS.length}">No records match the filters.</td></tr>`;
   $('#pager').innerHTML = rows.length > PAGE
     ? `<span>${fmtN(S.page*PAGE+1)}–${fmtN(Math.min(rows.length,(S.page+1)*PAGE))} of ${fmtN(rows.length)}</span><button class="btn" data-p="-1" ${S.page===0?'disabled':''}>Prev</button><button class="btn" data-p="1" ${S.page>=pages-1?'disabled':''}>Next</button>`
@@ -1310,19 +1365,20 @@ function exportCsv(){
   const A = analyse();
   const rows = sortRows(tableRows(A), S.sort, A);
   const q = v => { const s = String(v ?? ''); return /[",\n]/.test(s) ? '"' + s.replace(/"/g,'""') + '"' : s; };
-  const head = ['Groups','SubGroups','Prestart #','Fleet #','Registration','Description','Date','Weekday','Employee','Employee #','Kilometres','Km change','Hours','Type','Status','Time taken','Gearbox Entry','Km issue','Km issue detail'];
+  const head = ['Groups','SubGroups','Prestart #','Fleet #','Registration','Description','Date','Weekday','Employee','Employee #','Kilometres','Km change','Hours','Type','Status','Time taken','Gearbox Entry','Km issue','Km issue detail','Comment','Comment by','Comment date'];
   const lines = [head.join(',')];
   for (const r of rows) {
     const fl = A.flags.get(r.id) || [];
     const d = r.date ? `${r.date.slice(8,10)}/${r.date.slice(5,7)}/${r.date.slice(0,4)}` : '';
     lines.push([r.group, r.subgroup, r.id, r.fleet, r.rego, r.desc, d, r.date ? DOW[dowOf(r.date)] : '', r.employee, r.empNo, r.km, A.delta.get(r.id), r.hours, r.type,
       r.missing ? 'Missing' : r.completed ? 'Completed' : 'Incomplete', r.timeTaken, r.missing ? '' : r.gearbox,
-      fl.map(f => f.label).join('; '), fl.map(f => f.detail).join(' | ')].map(q).join(','));
+      fl.map(f => f.label).join('; '), fl.map(f => f.detail).join(' | '),
+      (commentOf(r) || {}).text, (commentOf(r) || {}).by, (commentOf(r) || {}).at].map(q).join(','));
   }
   download(`prestarts_${new Date().toISOString().slice(0,10)}.csv`, '﻿' + lines.join('\r\n'), 'text/csv');
 }
 function exportJson(){
-  download(`prestart_backup_${new Date().toISOString().slice(0,10)}.json`, JSON.stringify({ exported:new Date().toISOString(), settings:S.settings, records:S.records }), 'application/json');
+  download(`prestart_backup_${new Date().toISOString().slice(0,10)}.json`, JSON.stringify({ exported:new Date().toISOString(), settings:S.settings, records:S.records, comments:S.comments }), 'application/json');
 }
 
 /* ---------- events ---------- */
@@ -1351,6 +1407,17 @@ $('#tiles').addEventListener('click', e => {
 });
 $('#tbl thead').addEventListener('click', e => { const th = e.target.closest('th[data-k]'); if (!th) return; const k = th.dataset.k; S.sort = { key:k, dir: S.sort.key === k ? -S.sort.dir : (k === 'date' ? -1 : 1) }; renderTable(analyse()); });
 $('#kmTbl thead').addEventListener('click', e => { const th = e.target.closest('th[data-k]'); if (!th) return; const k = th.dataset.k; S.kmSort = { key:k, dir: S.kmSort.key === k ? -S.kmSort.dir : (k === 'date' ? -1 : 1) }; renderKm(analyse()); });
+$('#tbl tbody').addEventListener('click', e => {
+  const td = e.target.closest('td.cm'); if (!td) return;
+  const act = e.target.closest('[data-cm]');
+  if (act) {
+    if (act.dataset.cm === 'save') saveComment(td, td.querySelector('textarea').value);
+    else if (act.dataset.cm === 'delete') saveComment(td, '');
+    else renderTable(analyse());
+    return;
+  }
+  if (!td.querySelector('textarea')) openCommentEditor(td);
+});
 $('#pager').addEventListener('click', e => { const b = e.target.closest('[data-p]'); if (!b) return; S.page += +b.dataset.p; renderTable(analyse()); $('#tbl').scrollIntoView({ block:'nearest' }); });
 $('#groupSeg').addEventListener('click', e => { const b = e.target.closest('[data-g]'); if (!b) return; S.groupBy = b.dataset.g; document.querySelectorAll('#groupSeg button').forEach(x => x.setAttribute('aria-pressed', x === b)); save(); renderUsage(analyse()); });
 $('#matrix').addEventListener('mousemove', matrixTip);

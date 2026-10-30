@@ -370,8 +370,29 @@ def handle_api(event, route):
             recs = [r for r in recs if r.get('fleet') in allowed]
         latest = max((i.get('updatedAt', '') for i in items if i.get('kind') == 'prestart'), default='')
         vsync = max((i.get('updatedAt', '') for i in items if i.get('kind') == 'vehicle'), default='')
+        comments = {i['key']: {'text': i.get('text', ''), 'by': i.get('by', ''), 'at': i.get('at', '')}
+                    for i in items if i.get('kind') == 'comment' and i.get('key')}
         return resp(200, {'records': recs, 'vehicles': vehicles, 'updatedAt': latest, 'vehiclesUpdatedAt': vsync, 'user': email,
-                          'filter': {k: sorted(v) for k, v in flt.items()}})
+                          'filter': {k: sorted(v) for k, v in flt.items()}, 'comments': comments})
+    if route == 'POST /comments':
+        try:
+            b = json.loads(body_of(event) or '{}')
+        except Exception:
+            return resp(400, {'error': 'invalid json'})
+        key, text = str(b.get('key') or '').strip(), str(b.get('text') or '').strip()
+        if not key or len(key) > 200:
+            return resp(400, {'error': 'key required'})
+        if len(text) > 2000:
+            return resp(413, {'error': 'comment too long (max 2000 characters)'})
+        if not text:
+            table.delete_item(Key={'id': 'comment#' + key})
+            print(json.dumps({'msg': 'comment deleted', 'key': key, 'by': email}))
+            return resp(200, {'key': key, 'deleted': True})
+        item = {'id': 'comment#' + key, 'kind': 'comment', 'key': key, 'text': text, 'by': email,
+                'at': dt.datetime.now(dt.timezone.utc).isoformat(timespec='seconds')}
+        table.put_item(Item=item)
+        print(json.dumps({'msg': 'comment saved', 'key': key, 'by': email}))
+        return resp(200, {'key': key, 'text': text, 'by': email, 'at': item['at']})
     if route == 'POST /prestarts/import':
         try:
             recs = json.loads(body_of(event) or '{}').get('records', [])
