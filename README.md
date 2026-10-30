@@ -67,6 +67,10 @@ The Gearbox public API cannot *read* prestarts (the endpoint is create-only), so
 | Sign-in | Cognito pool `contractorportal` (Microsoft SAML IdP), app client `prestart-monitor` |
 | Schedule | EventBridge `prestart-monitor-vehicle-sync` (daily 05:00 AEST) |
 
+**Vehicle filter.** `GET /prestarts` only returns prestarts for vehicles matching the Lambda environment variables `FILTER_SUBGROUPS` (currently `Geraldton`) and `FILTER_TYPES` (currently `Prime Mover`), plus optional `FILTER_GROUPS`. The values are comma-separated, case-insensitive and matched against the Gearbox vehicle list. Every prestart is still stored, so changing the filter (Lambda → Configuration → Environment variables) takes effect immediately without losing data. Fleets missing from the Gearbox vehicle list are hidden while a filter is set.
+
+**Webhook security.** `REQUIRE_SIGNATURE=true` rejects deliveries whose `X-Gearbox-Signature` doesn't match `webhook_signing_key`.
+
 API routes: `GET /prestarts`, `POST /prestarts/import`, `POST /vehicles/sync` (all need a Microsoft sign-in from an `@mgncivil.com.au` account), and `POST /webhook/{token}` (Gearbox only, secret path token + HMAC signature).
 
 ### One-off setup

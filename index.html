@@ -690,6 +690,8 @@ async function loadServer(quiet){
       return r;
     });
     S.server.user = d.user || ''; S.server.updatedAt = d.updatedAt || ''; S.server.loadedAt = new Date();
+    const tc = s => s.replace(/\b\w/g, c => c.toUpperCase());
+    S.server.scope = Object.values(d.filter || {}).map(v => v.map(tc).join(' / ')).join(' · ');
     S.A = null; render(true);
   } catch(e) { console.error(e); S.server.error = e.message; toast(e.message, true); render(true); }
   finally { S.server.loading = false; }
@@ -935,7 +937,8 @@ function render(rebuildOptions){
   if (rebuildOptions) buildOptions(A);
   const rangeTxt = `${fmtN(A.recs.length)} prestarts · ${fmtShort(A.minDate)} ${A.minDate.slice(0,4)} – ${fmtShort(A.maxDate)} ${A.maxDate.slice(0,4)}`;
   if (SERVER) {
-    $('#dataStatus').innerHTML = `<span class="live"><i></i>Live from Gearbox</span> · ${esc(rangeTxt)}` +
+    $('#dataStatus').innerHTML = `<span class="live"><i></i>Live from Gearbox</span>` +
+      (S.server.scope ? ` · <b title="Only vehicles matching these Gearbox attributes are shown">${esc(S.server.scope)} only</b>` : '') + ` · ${esc(rangeTxt)}` +
       (S.server.loadedAt ? ` · refreshed ${S.server.loadedAt.toLocaleTimeString('en-AU', { hour:'numeric', minute:'2-digit' })}` : '');
   } else {
     $('#dataStatus').textContent = rangeTxt +
