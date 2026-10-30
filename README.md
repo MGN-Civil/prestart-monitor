@@ -4,6 +4,18 @@ A single-file web page for reviewing vehicle prestart checks exported from [Gear
 
 The page is a single `index.html` with no build step. Hosted at https://prestart.mgncivil.com.au it receives prestarts live from Gearbox behind Microsoft sign-in (see [Live mode](#live-mode-gearbox--aws)). Opened as a plain file, it works offline from Excel imports.
 
+## Screenshots
+
+*Anonymised sample data.*
+
+![Records with km checks and comments](docs/screenshots/records.png)
+
+| Usage by day | Calendar |
+|---|---|
+| ![Usage by day](docs/screenshots/usage.png) | ![Calendar](docs/screenshots/calendar.png) |
+
+![Km discrepancies](docs/screenshots/km.png)
+
 ## Features
 
 | Area | What it does |
