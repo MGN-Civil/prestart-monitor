@@ -192,12 +192,23 @@ def log_webhook(headers, raw, outcome, name):
 
 
 def find_prestart(payload):
-    """Gearbox may send the prestart at the top level or wrapped (data / prestart / payload / object)."""
-    for k in ('data', 'prestart', 'payload', 'object', 'resource'):
-        v = payload.get(k)
+    """Find the prestart object. Gearbox actually sends {"event_name", "model", "attributes": {...prestart...}};
+    also accept it at the top level or under any other wrapper key."""
+    if not isinstance(payload, dict):
+        return {}
+    if 'fleet_number' in payload or 'prestart_number' in payload:
+        return payload
+    for k in ('attributes', 'data', 'prestart', 'payload', 'object', 'resource'):
+        if isinstance(payload.get(k), dict):
+            found = find_prestart(payload[k])
+            if found:
+                return found
+    for v in payload.values():
         if isinstance(v, dict):
-            return find_prestart(v) if not ('fleet_number' in v or 'prestart_number' in v) else v
-    return payload
+            found = find_prestart(v)
+            if found:
+                return found
+    return {}
 
 
 def handle_webhook(event):
