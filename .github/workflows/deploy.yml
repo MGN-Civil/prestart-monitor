@@ -1,5 +1,6 @@
 name: Deploy
 # Deploys index.html to S3/CloudFront and backend/ to Lambda (repo: MGN-Civil/prestart-monitor)
+# AWS role trust uses the GitHub OIDC sub with org/repo IDs (MGN-Civil@267188430/prestart-monitor@1429194951)
 
 on:
   push:
