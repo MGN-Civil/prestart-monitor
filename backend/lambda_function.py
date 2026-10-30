@@ -176,36 +176,68 @@ def prestart_from_webhook(p):
     }
 
 
+def log_webhook(headers, raw, outcome, name):
+    """Keep the last deliveries (7 days) for troubleshooting: DynamoDB items kind=webhooklog."""
+    print(json.dumps({'msg': 'webhook', 'event': name, 'outcome': outcome, 'bytes': len(raw or ''),
+                      'headers': sorted(h for h in headers if h.startswith('x-') or h in ('user-agent', 'content-type'))}))
+    try:
+        now = dt.datetime.now(dt.timezone.utc)
+        table.put_item(Item={'id': f"webhooklog#{now.isoformat(timespec='milliseconds')}#{time.time_ns() % 1000000}", 'kind': 'webhooklog',
+                             'event': name or '', 'outcome': outcome, 'body': (raw or '')[:20000],
+                             'headers': {k: str(v)[:300] for k, v in headers.items()
+                                         if k.startswith('x-gearbox') or k in ('user-agent', 'content-type')},
+                             'ttl': int(now.timestamp()) + 7 * 86400})
+    except Exception as e:
+        print(json.dumps({'msg': 'webhook log failed', 'error': str(e)[:200]}))
+
+
+def find_prestart(payload):
+    """Gearbox may send the prestart at the top level or wrapped (data / prestart / payload / object)."""
+    for k in ('data', 'prestart', 'payload', 'object', 'resource'):
+        v = payload.get(k)
+        if isinstance(v, dict):
+            return find_prestart(v) if not ('fleet_number' in v or 'prestart_number' in v) else v
+    return payload
+
+
 def handle_webhook(event):
     headers = {k.lower(): v for k, v in (event.get('headers') or {}).items()}
     sec = secret()
     token = (event.get('pathParameters') or {}).get('token', '')
-    if not sec.get('webhook_path_token') or not hmac.compare_digest(token, sec['webhook_path_token']):
-        return resp(404, {'error': 'not found'})
     raw = body_of(event)
+    if not sec.get('webhook_path_token') or not hmac.compare_digest(token, sec['webhook_path_token']):
+        print(json.dumps({'msg': 'webhook wrong path token', 'token_len': len(token), 'ua': headers.get('user-agent', '')[:60]}))
+        return resp(404, {'error': 'not found'})
     try:
         payload = json.loads(raw or '{}')
     except Exception:
+        log_webhook(headers, raw, 'invalid json', '')
         return resp(400, {'error': 'invalid json'})
-    name = headers.get('x-gearbox-event') or payload.get('event_name') or ''
+    name = str(headers.get('x-gearbox-event') or payload.get('event_name') or payload.get('event') or payload.get('type') or '')
     if name == 'url_verification':
+        log_webhook(headers, raw, 'verification answered', name)
         sig = (headers.get('x-gearbox-signature') or '').split(',')[0].strip()
         return resp(200, {'challenge': sig})
+    strict = os.environ.get('REQUIRE_SIGNATURE', 'false') == 'true'
     keys = [k.strip() for k in str(sec.get('webhook_signing_key', '')).split(',') if k.strip()]
     verified = signature_ok(headers, raw, keys)
-    if not timestamp_fresh(headers):
-        print(json.dumps({'msg': 'stale timestamp', 'event': name}))
+    if strict and not timestamp_fresh(headers):
+        log_webhook(headers, raw, 'rejected: stale timestamp', name)
         return resp(401, {'error': 'stale'})
-    if keys and not verified and os.environ.get('REQUIRE_SIGNATURE', 'false') == 'true':
-        print(json.dumps({'msg': 'bad signature', 'event': name}))
+    if strict and keys and not verified:
+        log_webhook(headers, raw, 'rejected: bad signature', name)
         return resp(401, {'error': 'bad signature'})
-    if not name.startswith('prestart'):
+    data = find_prestart(payload)
+    looks_like_prestart = 'prestart' in name.lower() or 'prestart_number' in data or ('fleet_number' in data and 'questions' in data)
+    if not looks_like_prestart:
+        log_webhook(headers, raw, 'ignored (not a prestart event)', name)
         return resp(200, {'ignored': name})
-    data = payload.get('data') if isinstance(payload.get('data'), dict) else payload
     rec = prestart_from_webhook(data)
-    if not rec['id'] or rec['id'] == 'None':
-        return resp(400, {'error': 'missing id'})
+    if not rec['id'] or rec['id'] == 'None' or not rec['fleet']:
+        log_webhook(headers, raw, 'rejected: no prestart id/fleet', name)
+        return resp(400, {'error': 'missing id or fleet_number'})
     upsert(rec)
+    log_webhook(headers, raw, f"stored {rec['id']} ({'signature ok' if verified else 'signature NOT verified'})", name)
     print(json.dumps({'msg': 'stored', 'event': name, 'id': rec['id'], 'fleet': rec['fleet'], 'verified': verified}))
     return resp(200, {'ok': True, 'verified': verified})
 
