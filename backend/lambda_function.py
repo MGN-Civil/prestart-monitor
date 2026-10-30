@@ -298,11 +298,35 @@ def sync_vehicles():
             desc = ' '.join(x for x in (v.get('make'), v.get('model'), v.get('type')) if x)
             bw.put_item(Item=to_ddb({k: x for k, x in {
                 'id': 'vehicle#' + fl, 'kind': 'vehicle', 'fleet': fl, 'rego': v.get('registration'), 'desc': desc,
-                'group': v.get('group'), 'subgroup': v.get('sub_group'), 'sold': bool(v.get('sold')),
+                'group': v.get('group'), 'subgroup': v.get('sub_group'), 'vtype': v.get('type'),
+                'make': v.get('make'), 'model': v.get('model'), 'sold': bool(v.get('sold')),
                 'updatedAt': dt.datetime.now(dt.timezone.utc).isoformat(timespec='seconds')}.items() if x not in (None, '')}))
             n += 1
     print(json.dumps({'msg': 'vehicles synced', 'count': n}))
     return n
+
+
+# ---------------------------------------------------------------- vehicle filter
+# Only prestarts for vehicles matching these Gearbox vehicle attributes are returned by GET /prestarts.
+# Env vars (comma-separated, case-insensitive; empty = no restriction):
+#   FILTER_SUBGROUPS  e.g. "Geraldton"      (Gearbox vehicle sub_group)
+#   FILTER_TYPES      e.g. "Prime Mover"    (Gearbox vehicle type)
+#   FILTER_GROUPS     e.g. "MGN Civil"      (Gearbox vehicle group)
+def _norm(s):
+    return re.sub(r'\s+', ' ', str(s or '')).strip().lower()
+
+
+def vehicle_filter():
+    f = {}
+    for env, field in (('FILTER_SUBGROUPS', 'subgroup'), ('FILTER_TYPES', 'vtype'), ('FILTER_GROUPS', 'group')):
+        vals = {_norm(x) for x in os.environ.get(env, '').split(',') if x.strip()}
+        if vals:
+            f[field] = vals
+    return f
+
+
+def vehicle_matches(v, flt):
+    return all(_norm(v.get(field)) in vals for field, vals in flt.items())
 
 
 # ---------------------------------------------------------------- authenticated API
@@ -317,11 +341,18 @@ def handle_api(event, route):
         return resp(403, {'error': 'forbidden'})
     if route == 'GET /prestarts':
         items = scan_all()
+        vehicles = [{k: v for k, v in i.items() if k in ('fleet', 'rego', 'desc', 'group', 'subgroup', 'vtype', 'sold')}
+                    for i in items if i.get('kind') == 'vehicle']
         recs = [{k: v for k, v in i.items() if k not in ('kind', 'updatedAt')} for i in items if i.get('kind') == 'prestart']
-        vehicles = [{k: v for k, v in i.items() if k in ('fleet', 'rego', 'desc', 'group', 'subgroup', 'sold')} for i in items if i.get('kind') == 'vehicle']
+        flt = vehicle_filter()
+        if flt:
+            vehicles = [v for v in vehicles if vehicle_matches(v, flt)]
+            allowed = {v['fleet'] for v in vehicles}
+            recs = [r for r in recs if r.get('fleet') in allowed]
         latest = max((i.get('updatedAt', '') for i in items if i.get('kind') == 'prestart'), default='')
         vsync = max((i.get('updatedAt', '') for i in items if i.get('kind') == 'vehicle'), default='')
-        return resp(200, {'records': recs, 'vehicles': vehicles, 'updatedAt': latest, 'vehiclesUpdatedAt': vsync, 'user': email})
+        return resp(200, {'records': recs, 'vehicles': vehicles, 'updatedAt': latest, 'vehiclesUpdatedAt': vsync, 'user': email,
+                          'filter': {k: sorted(v) for k, v in flt.items()}})
     if route == 'POST /prestarts/import':
         try:
             recs = json.loads(body_of(event) or '{}').get('records', [])
