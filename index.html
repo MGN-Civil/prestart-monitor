@@ -42,6 +42,7 @@
   --shadow:none;
 }
 *{box-sizing:border-box}
+[hidden]{display:none!important}
 html,body{margin:0}
 body{background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
 .wrap{max-width:1440px;margin:0 auto;padding:0 16px}
@@ -65,6 +66,11 @@ header.top .wrap{display:flex;flex-wrap:wrap;align-items:center;gap:12px 20px;pa
 .btn:disabled{opacity:.45;cursor:default}
 .btn svg{width:16px;height:16px}
 input[type=file]{display:none}
+.user{display:inline-flex;align-items:center;gap:8px;font-size:12px;color:var(--text-2);margin-right:4px}
+.user a{color:var(--accent-ink);cursor:pointer;text-decoration:none}
+.user a:hover{text-decoration:underline}
+.live{display:inline-flex;align-items:center;gap:6px}
+.live i{width:7px;height:7px;border-radius:50%;background:var(--good);display:inline-block}
 
 /* Toast */
 .toast{position:fixed;left:50%;bottom:20px;transform:translateX(-50%) translateY(20px);background:var(--text);color:var(--bg);padding:10px 16px;border-radius:8px;opacity:0;pointer-events:none;transition:.2s;z-index:50;max-width:calc(100% - 32px);font-size:13px}
@@ -266,6 +272,11 @@ details.rules[open] summary::before{transform:rotate(90deg)}
       </div>
     </div>
     <div class="actions">
+      <span class="user" id="userBox" hidden></span>
+      <button class="btn" id="btnRefresh" hidden title="Reload the latest prestarts from Gearbox">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
+        Refresh
+      </button>
       <label class="btn primary" for="fileIn" title="Import a Gearbox Prestart Report (.xlsx, .xls, .csv) or a JSON backup. New rows are added and existing Prestart #s updated.">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5"/><path d="M12 3v12"/></svg>
         Import / update
@@ -306,9 +317,9 @@ details.rules[open] summary::before{transform:rotate(90deg)}
   <div class="wrap">
     <section id="emptyState" class="empty">
       <div class="icon"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M12 18v-6"/><path d="M9 15l3-3 3 3"/></svg></div>
-      <h2>Import a Gearbox prestart report</h2>
-      <p>Drop the exported <b>.xlsx</b> or <b>.csv</b> here, or use <b>Import / update</b>. Data stays in this browser. Importing a newer export later adds new prestarts and updates existing ones by Prestart #.</p>
-      <label class="btn primary" for="fileIn">Choose file…</label>
+      <h2 id="emptyTitle">Import a Gearbox prestart report</h2>
+      <p id="emptyText">Drop the exported <b>.xlsx</b> or <b>.csv</b> here, or use <b>Import / update</b>. Data stays in this browser. Importing a newer export later adds new prestarts and updates existing ones by Prestart #.</p>
+      <label class="btn primary" for="fileIn" id="emptyBtn">Choose file…</label>
     </section>
 
     <div id="app" hidden>
@@ -428,6 +439,20 @@ details.rules[open] summary::before{transform:rotate(90deg)}
 <script>
 (() => {
 'use strict';
+/* ---------- deployment config ----------
+   Server mode (live Gearbox data + Microsoft sign-in) is used when the page is served over HTTPS
+   from one of ORIGINS. Opened any other way (e.g. a local file), it runs in local mode: Excel import,
+   data kept in this browser only. */
+const CONFIG = {
+  apiBase: 'https://iqz9c493v6.execute-api.ap-southeast-2.amazonaws.com',
+  authDomain: 'https://mgncivil-portal.auth.ap-southeast-2.amazoncognito.com',
+  clientId: '4tbdgfjbuf3eb4e4ugfqdrilpb',
+  idp: 'Microsoft',
+  origins: ['https://prestart.mgncivil.com.au', 'https://d1fz2h5h7lkkjo.cloudfront.net'],
+  refreshMinutes: 5
+};
+const SERVER = CONFIG.apiBase && CONFIG.origins.includes(location.origin);
+
 /* ---------- constants & state ---------- */
 const STORE_KEY = 'prestartMonitor.v1';
 const DOW = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
@@ -461,15 +486,15 @@ const idNum = id => { const n = parseFloat(id); return isNaN(n) ? Infinity : n; 
 
 /* ---------- storage ---------- */
 function save(){
-  try { localStorage.setItem(STORE_KEY, JSON.stringify({ records:S.records, meta:S.meta, settings:S.settings, groupBy:S.groupBy, calMode:S.cal.mode })); }
+  try { localStorage.setItem(STORE_KEY, JSON.stringify({ records: SERVER ? [] : S.records, meta: SERVER ? {} : S.meta, settings:S.settings, groupBy:S.groupBy, calMode:S.cal.mode })); }
   catch(e){ toast('Could not save to browser storage – data will be lost on reload. Use Backup.', true); }
 }
 function load(){
   try {
     const raw = localStorage.getItem(STORE_KEY); if (!raw) return;
     const d = JSON.parse(raw);
-    if (Array.isArray(d.records)) S.records = d.records;
-    if (d.meta) S.meta = d.meta;
+    if (!SERVER && Array.isArray(d.records)) S.records = d.records;
+    if (!SERVER && d.meta) S.meta = d.meta;
     if (d.settings) S.settings = { ...DEFAULT_SETTINGS, ...d.settings };
     if (d.groupBy) S.groupBy = d.groupBy;
     if (d.calMode === 'week' || d.calMode === 'month') S.cal.mode = d.calMode;
@@ -572,6 +597,7 @@ function merge(incoming){
 }
 
 async function importFiles(files){
+  if (SERVER) return uploadFiles(files);
   let tot = { added:0, updated:0, same:0 }, names = [];
   try {
     for (const f of files) {
@@ -587,6 +613,102 @@ async function importFiles(files){
     toast(`Imported ${names.join(', ')} — ${tot.added} new, ${tot.updated} updated, ${tot.same} unchanged`);
   } catch(e) { console.error(e); toast(e.message || 'Import failed', true); }
 }
+
+/* ---------- Microsoft sign-in (Cognito hosted UI, auth code + PKCE) ---------- */
+const AUTH_KEY = 'prestartMonitor.auth';
+const b64url = buf => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+const randStr = n => b64url(crypto.getRandomValues(new Uint8Array(n)));
+const redirectUri = () => location.origin + '/';
+function getAuth(){ try { return JSON.parse(sessionStorage.getItem(AUTH_KEY) || 'null'); } catch(e){ return null; } }
+function setAuth(a){ try { a ? sessionStorage.setItem(AUTH_KEY, JSON.stringify(a)) : sessionStorage.removeItem(AUTH_KEY); } catch(e){} }
+function jwtClaims(t){ try { return JSON.parse(decodeURIComponent(escape(atob(t.split('.')[1].replace(/-/g,'+').replace(/_/g,'/'))))); } catch(e){ return {}; } }
+
+async function login(){
+  const verifier = randStr(48), state = randStr(16);
+  const challenge = b64url(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier)));
+  try { sessionStorage.setItem('pm.pkce', JSON.stringify({ verifier, state })); } catch(e){}
+  const q = new URLSearchParams({ response_type:'code', client_id:CONFIG.clientId, redirect_uri:redirectUri(), scope:'openid email profile',
+    identity_provider:CONFIG.idp, code_challenge_method:'S256', code_challenge:challenge, state });
+  location.assign(CONFIG.authDomain + '/oauth2/authorize?' + q);
+}
+function logout(){
+  setAuth(null);
+  location.assign(CONFIG.authDomain + '/logout?' + new URLSearchParams({ client_id:CONFIG.clientId, logout_uri:redirectUri() }));
+}
+async function tokenRequest(params){
+  const r = await fetch(CONFIG.authDomain + '/oauth2/token', { method:'POST', headers:{ 'Content-Type':'application/x-www-form-urlencoded' },
+    body:new URLSearchParams({ client_id:CONFIG.clientId, ...params }) });
+  if (!r.ok) throw new Error('Sign-in failed (' + r.status + ')');
+  const t = await r.json();
+  const prev = getAuth() || {};
+  const a = { id:t.id_token, refresh:t.refresh_token || prev.refresh, exp:Date.now() + (t.expires_in || 3600) * 1000 };
+  setAuth(a); return a;
+}
+async function handleRedirect(){
+  const q = new URLSearchParams(location.search);
+  if (!q.has('code') && !q.has('error')) return;
+  history.replaceState(null, '', location.pathname);
+  if (q.has('error')) throw new Error('Sign-in was cancelled or refused: ' + (q.get('error_description') || q.get('error')));
+  let p = null; try { p = JSON.parse(sessionStorage.getItem('pm.pkce') || 'null'); sessionStorage.removeItem('pm.pkce'); } catch(e){}
+  if (!p || p.state !== q.get('state')) throw new Error('Sign-in state mismatch — please try again.');
+  await tokenRequest({ grant_type:'authorization_code', code:q.get('code'), redirect_uri:redirectUri(), code_verifier:p.verifier });
+}
+async function idToken(){
+  let a = getAuth();
+  if (a && a.exp - 60e3 > Date.now()) return a.id;
+  if (a && a.refresh) { try { a = await tokenRequest({ grant_type:'refresh_token', refresh_token:a.refresh }); return a.id; } catch(e){ setAuth(null); } }
+  await login(); return new Promise(() => {}); // navigating away
+}
+async function api(path, opts = {}){
+  const tok = await idToken();
+  const r = await fetch(CONFIG.apiBase + path, { ...opts, headers:{ ...(opts.headers||{}), Authorization:'Bearer ' + tok } });
+  if (r.status === 401) { setAuth(null); await login(); }
+  if (r.status === 403) throw new Error('Your account is not allowed to view prestart data.');
+  if (!r.ok) { let m = r.status; try { m = (await r.json()).error || m; } catch(e){} throw new Error('Server error: ' + m); }
+  return r.json();
+}
+
+/* ---------- server data ---------- */
+S.vehicles = new Map();
+S.server = { user:'', loadedAt:null, updatedAt:'', loading:false, error:'' };
+function fromServer(r){
+  return { id:String(r.id), group:r.group||'', subgroup:r.subgroup||'', fleet:r.fleet||'', rego:r.rego||'', desc:r.desc||'',
+    date:r.date||'', employee:r.employee||'', empNo:r.empNo != null ? String(r.empNo) : '', km: r.km == null ? null : Number(r.km),
+    hours: r.hours == null ? null : Number(r.hours), type:r.type||'', completed: r.completed !== false, timeTaken:r.timeTaken||'',
+    gearbox: !!r.gearbox, notes:r.notes||'', fails: Array.isArray(r.fails) ? r.fails : [], source:r.source||'' };
+}
+async function loadServer(quiet){
+  if (S.server.loading) return;
+  S.server.loading = true; S.server.error = '';
+  if (!quiet) setStatus('Loading prestarts…');
+  try {
+    const d = await api('/prestarts');
+    S.vehicles = new Map((d.vehicles || []).map(v => [v.fleet, v]));
+    S.records = (d.records || []).map(fromServer).map(r => {
+      const v = S.vehicles.get(r.fleet);
+      if (v) { if (!r.rego) r.rego = v.rego || ''; if (!r.desc) r.desc = v.desc || ''; if (!r.group) r.group = v.group || ''; }
+      return r;
+    });
+    S.server.user = d.user || ''; S.server.updatedAt = d.updatedAt || ''; S.server.loadedAt = new Date();
+    S.A = null; render(true);
+  } catch(e) { console.error(e); S.server.error = e.message; toast(e.message, true); render(true); }
+  finally { S.server.loading = false; }
+}
+async function uploadFiles(files){
+  try {
+    let recs = [], names = [];
+    for (const f of files) { recs = recs.concat(await readFile(f)); names.push(f.name); }
+    recs = recs.filter(r => r.fleet && /^\d{4}-\d{2}-\d{2}$/.test(r.date));
+    let n = 0;
+    for (let i = 0; i < recs.length; i += 400) {
+      toast(`Uploading ${Math.min(i + 400, recs.length)} of ${recs.length}…`);
+      n += (await api('/prestarts/import', { method:'POST', headers:{ 'Content-Type':'application/json' }, body:JSON.stringify({ records:recs.slice(i, i + 400) }) })).imported || 0;
+    }
+    await loadServer(true);
+    toast(`Imported ${names.join(', ')} — ${n} prestarts saved for everyone`);
+  } catch(e) { console.error(e); toast(e.message || 'Upload failed', true); }
+}
+function setStatus(t){ const el = $('#dataStatus'); if (el) el.textContent = t; }
 
 /* ---------- analysis ---------- */
 function analyse(){
@@ -674,6 +796,7 @@ function analyse(){
   const flagged = new Set([...flags.keys()]);
   const rego = new Map();
   [...recs].sort(cmp).forEach(r => { if (r.fleet && r.rego) rego.set(r.fleet, r.rego); });
+  if (S.vehicles) for (const [fl, v] of S.vehicles) if (v.rego) rego.set(fl, v.rego);   // Gearbox vehicle list wins
   S.A = { recs, flags, rego, flagged, delta, series, fleets, employees:[...new Set(recs.map(r=>r.employee))].filter(Boolean).sort(),
           minDate: recs.reduce((m,r)=>!m||r.date<m?r.date:m,''), maxDate: recs.reduce((m,r)=>!m||r.date>m?r.date:m,'') };
   return S.A;
@@ -795,11 +918,29 @@ function render(rebuildOptions){
   const has = S.records.length > 0;
   $('#emptyState').hidden = has; $('#app').hidden = !has; $('#filterBar').hidden = !has;
   ['#btnCsv','#btnJson','#btnClear'].forEach(s => $(s).disabled = !has);
-  if (!has) { $('#dataStatus').textContent = 'No data loaded'; return; }
+  if (SERVER) {
+    $('#btnClear').hidden = true; $('#btnRefresh').hidden = false;
+    const ub = $('#userBox'); ub.hidden = !S.server.user;
+    if (S.server.user) ub.innerHTML = `${esc(S.server.user)} · <a id="lnkOut">Sign out</a>`;
+    if (!has) {
+      $('#emptyTitle').textContent = S.server.error ? 'Couldn’t load prestarts' : S.server.loadedAt ? 'No prestarts yet' : 'Signing in…';
+      $('#emptyText').innerHTML = S.server.error ? esc(S.server.error) : S.server.loadedAt
+        ? 'New prestarts arrive automatically from Gearbox. To load history, import a Gearbox <b>Prestart Report</b> export (.xlsx) once — it’s saved for everyone.'
+        : 'Connecting with your Microsoft account.';
+      $('#emptyBtn').hidden = !S.server.loadedAt;
+    }
+  }
+  if (!has) { setStatus(SERVER ? (S.server.loadedAt ? 'Live from Gearbox · no prestarts yet' : 'Connecting…') : 'No data loaded'); return; }
   const A = analyse();
   if (rebuildOptions) buildOptions(A);
-  $('#dataStatus').textContent = `${fmtN(A.recs.length)} prestarts · ${fmtShort(A.minDate)} ${A.minDate.slice(0,4)} – ${fmtShort(A.maxDate)} ${A.maxDate.slice(0,4)}` +
-    (S.meta.lastImport ? ` · last import ${new Date(S.meta.lastImport).toLocaleString('en-AU', { dateStyle:'medium', timeStyle:'short' })}` : '');
+  const rangeTxt = `${fmtN(A.recs.length)} prestarts · ${fmtShort(A.minDate)} ${A.minDate.slice(0,4)} – ${fmtShort(A.maxDate)} ${A.maxDate.slice(0,4)}`;
+  if (SERVER) {
+    $('#dataStatus').innerHTML = `<span class="live"><i></i>Live from Gearbox</span> · ${esc(rangeTxt)}` +
+      (S.server.loadedAt ? ` · refreshed ${S.server.loadedAt.toLocaleTimeString('en-AU', { hour:'numeric', minute:'2-digit' })}` : '');
+  } else {
+    $('#dataStatus').textContent = rangeTxt +
+      (S.meta.lastImport ? ` · last import ${new Date(S.meta.lastImport).toLocaleString('en-AU', { dateStyle:'medium', timeStyle:'short' })}` : '');
+  }
   renderTiles(A);
   if (S.tab === 'records') renderTable(A);
   if (S.tab === 'usage') renderUsage(A);
@@ -851,7 +992,9 @@ function flagHtml(A, id){
 }
 function statusBadge(r){
   if (r.missing) return '<span class="badge crit"><i class="dot"></i>Missing</span>';
-  return r.completed ? '<span class="badge good"><i class="dot"></i>Completed</span>' : '<span class="badge warn"><i class="dot"></i>Incomplete</span>';
+  const fails = Array.isArray(r.fails) && r.fails.length
+    ? ` <span class="flag" title="${esc(r.fails.join('\n'))}">⚠ ${r.fails.length} failed item${r.fails.length > 1 ? 's' : ''}</span>` : '';
+  return (r.completed ? '<span class="badge good"><i class="dot"></i>Completed</span>' : '<span class="badge warn"><i class="dot"></i>Incomplete</span>') + fails;
 }
 
 function headHtml(cols, sort){
@@ -1261,6 +1404,19 @@ let rT; addEventListener('resize', () => { clearTimeout(rT); rT = setTimeout(() 
 /* ---------- boot ---------- */
 load();
 render(true);
+if (SERVER) {
+  $('#btnRefresh').addEventListener('click', () => loadServer());
+  $('#userBox').addEventListener('click', e => { if (e.target.id === 'lnkOut') logout(); });
+  (async () => {
+    try { await handleRedirect(); await idToken(); await loadServer(); }
+    catch(e) { console.error(e); S.server.error = e.message; S.server.loadedAt = null; render(true); toast(e.message, true); }
+  })();
+  // keep it current while the tab is open
+  setInterval(() => { if (document.visibilityState === 'visible' && getAuth()) loadServer(true); }, CONFIG.refreshMinutes * 60e3);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && S.server.loadedAt && Date.now() - S.server.loadedAt > CONFIG.refreshMinutes * 60e3) loadServer(true);
+  });
+}
 })();
 </script>
 </body>

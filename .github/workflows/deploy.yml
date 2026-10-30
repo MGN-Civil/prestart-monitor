@@ -1,0 +1,50 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - index.html
+      - backend/**
+      - .github/workflows/deploy.yml
+  workflow_dispatch:
+
+permissions:
+  id-token: write   # OIDC: no AWS keys stored in GitHub
+  contents: read
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ap-southeast-2
+  ROLE_ARN: arn:aws:iam::864899855442:role/prestart-monitor-github-deploy
+  SITE_BUCKET: prestart.mgncivil.com.au
+  DISTRIBUTION_ID: E3PFFGWD843NTL
+  FUNCTION_NAME: prestart-monitor-api
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Check Lambda syntax
+        run: python3 -m py_compile backend/lambda_function.py
+
+      - name: Deploy Lambda
+        run: |
+          cd backend && zip -q -j ../lambda.zip lambda_function.py && cd ..
+          aws lambda update-function-code --function-name "$FUNCTION_NAME" --zip-file fileb://lambda.zip --query 'LastModified' --output text
+
+      - name: Deploy page
+        run: |
+          aws s3 cp index.html "s3://$SITE_BUCKET/index.html" \
+            --content-type "text/html; charset=utf-8" --cache-control "no-cache"
+          aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION_ID" --paths "/" "/index.html" --query 'Invalidation.Id' --output text

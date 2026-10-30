@@ -2,7 +2,7 @@
 
 A single-file web page for reviewing vehicle prestart checks exported from [Gearbox](https://www.gearbox.com.au/). Import the Gearbox *Prestart Report* spreadsheet, then filter, sort and visualise prestart usage, missing days and odometer (km) discrepancies.
 
-Everything runs in the browser. There is no server, no build step and no data in the repository, so the page can be hosted on S3 (or any static host) as-is.
+The page is a single `index.html` with no build step. Hosted at https://prestart.mgncivil.com.au it receives prestarts live from Gearbox behind Microsoft sign-in (see [Live mode](#live-mode-gearbox--aws)). Opened as a plain file, it works offline from Excel imports.
 
 ## Features
 
@@ -44,21 +44,49 @@ The column names from the Gearbox export (matching ignores case, spaces and punc
 - **Date format:** Australian `dd/mm/yyyy` text, or real Excel dates.
 - **Completed status:** taken from `Completed` (1/0), otherwise from `Time taken` ≠ "Incomplete".
 
-## Hosting on Amazon S3
+## Live mode (Gearbox → AWS)
 
-1. Create a bucket and turn on **Static website hosting** with index document `index.html`.
-2. Upload `index.html` with content type `text/html`.
-3. Give access through a bucket policy, CloudFront, or whatever your organisation uses.
+When the page is opened at **https://prestart.mgncivil.com.au** it runs in *live mode*: users sign in with their Microsoft (MGN Civil) account and see shared data that updates automatically from Gearbox. Opened any other way (e.g. a local copy of `index.html`), it falls back to *local mode* (Excel import, data in that browser only).
 
-```bash
-aws s3 cp index.html s3://YOUR-BUCKET/index.html --content-type text/html
 ```
+Gearbox ──prestart.created webhook──▶ API Gateway /webhook/{token} ──▶ Lambda ──▶ DynamoDB
+Gearbox API (vehicles, daily 5am) ◀── EventBridge ── Lambda ──────────────────────▲
+Browser ──Microsoft sign-in (Cognito + Entra SAML)──▶ API Gateway (JWT) ──▶ Lambda ┘
+Browser ◀── CloudFront ◀── S3 (index.html, private)
+```
+
+The Gearbox public API cannot *read* prestarts (the endpoint is create-only), so new prestarts arrive via the **`prestart.created` webhook**. History is loaded once by importing a Gearbox *Prestart Report* export; in live mode **Import / update** saves to the shared store for everyone. The webhook doesn't include *time taken* or *incomplete* prestarts. Those come only from Excel imports.
+
+| AWS resource (ap-southeast-2) | Name |
+|---|---|
+| CloudFront + private S3 (page) | `E3PFFGWD843NTL` → bucket `prestart.mgncivil.com.au` |
+| HTTP API | `prestart-monitor-api` (`iqz9c493v6`) |
+| Lambda (Python 3.12) | `prestart-monitor-api`, source in [`backend/lambda_function.py`](backend/lambda_function.py) |
+| DynamoDB | `PrestartMonitor` (prestarts + `vehicle#…` items) |
+| Secrets Manager | `prestart-monitor/gearbox` |
+| Sign-in | Cognito pool `contractorportal` (Microsoft SAML IdP), app client `prestart-monitor` |
+| Schedule | EventBridge `prestart-monitor-vehicle-sync` (daily 05:00 AEST) |
+
+API routes: `GET /prestarts`, `POST /prestarts/import`, `POST /vehicles/sync` (all need a Microsoft sign-in from an `@mgncivil.com.au` account), and `POST /webhook/{token}` (Gearbox only, secret path token + HMAC signature).
+
+### One-off setup
+
+1. **Gearbox credentials → Secrets Manager.** In the AWS console open *Secrets Manager → `prestart-monitor/gearbox` → Retrieve secret value → Edit* and fill in `client_id`, `client_secret` and `business_token` (Gearbox *Settings → Integrations*). Leave `webhook_path_token` as it is.
+2. **Gearbox webhook.** In Gearbox *Settings → Webhooks → Add New Webhook*: URL `https://iqz9c493v6.execute-api.ap-southeast-2.amazonaws.com/webhook/<webhook_path_token>`, event **Prestarts → prestart.created**. Gearbox verifies the endpoint automatically. Then copy the webhook's **signing key** into the secret's `webhook_signing_key`.
+3. **DNS.** Add a CNAME `prestart.mgncivil.com.au → d1fz2h5h7lkkjo.cloudfront.net` at the DNS provider. Until then the page also works at https://d1fz2h5h7lkkjo.cloudfront.net.
+4. **History.** Sign in and use **Import / update** with the latest Gearbox Prestart Report export.
+
+### Deploying changes
+
+Pushing to `main` runs [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml). It assumes the IAM role `prestart-monitor-github-deploy` through GitHub OIDC (no stored AWS keys), updates the Lambda code, uploads `index.html` to S3 and invalidates CloudFront.
+
+Configuration for the page (API URL, Cognito domain, client ID, allowed origins) is the `CONFIG` block at the top of the script in `index.html`.
 
 ## Data & privacy
 
-- The file contains **no prestart data**, so a public bucket exposes nothing.
-- Imported data is stored only in the viewer's own browser (`localStorage`). Other users and devices don't see it; use *Backup* / import to move it.
-- *Clear* removes the stored data from that browser.
+- **Live mode:** prestart data is stored in DynamoDB in Sydney and only served to signed-in `@mgncivil.com.au` Microsoft accounts. The page itself contains no data. Sign-in tokens are kept in the browser tab's session storage.
+- **Local mode:** imported data stays in that browser's `localStorage`; *Clear* removes it.
+- No data, credentials or keys are stored in this repository.
 
 ## Dependencies
 
