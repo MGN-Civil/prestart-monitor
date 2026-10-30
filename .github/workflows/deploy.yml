@@ -1,4 +1,5 @@
 name: Deploy
+# Deploys index.html to S3/CloudFront and backend/ to Lambda (repo: MGN-Civil/prestart-monitor)
 
 on:
   push:
