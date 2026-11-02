@@ -81,6 +81,8 @@ The Gearbox public API cannot *read* prestarts (the endpoint is create-only), so
 
 **Vehicle filter.** `GET /prestarts` only returns prestarts for vehicles matching the Lambda environment variables `FILTER_SUBGROUPS` (currently `Geraldton`) and `FILTER_TYPES` (currently `Prime Mover`), plus optional `FILTER_GROUPS`. The values are comma-separated, case-insensitive and matched against the Gearbox vehicle list. Every prestart is still stored, so changing the filter (Lambda → Configuration → Environment variables) takes effect immediately without losing data. Fleets missing from the Gearbox vehicle list are hidden while a filter is set.
 
+**Times.** Prestart times (from the webhook's `completed_at`) are shown in local Geraldton time (Australia/Perth, UTC+8) regardless of the viewer's computer, and the prestart date follows WA time. Change `LOCAL_TZ` in `index.html` to use another zone. Excel-imported history has no time.
+
 **Webhook security.** `REQUIRE_SIGNATURE=true` rejects deliveries whose `X-Gearbox-Signature` doesn't match `webhook_signing_key`.
 
 API routes: `GET /prestarts` (includes comments), `POST /comments` (`{key, text}`; empty text deletes), `POST /prestarts/import`, `POST /vehicles/sync` (all need a Microsoft sign-in from an `@mgncivil.com.au` account), and `POST /webhook/{token}` (Gearbox only, secret path token + HMAC signature).

@@ -494,9 +494,17 @@ const addDays = (iso, n) => { const d = new Date(iso + 'T00:00:00Z'); d.setUTCDa
 const daysBetween = (a, b) => Math.round((Date.parse(b) - Date.parse(a)) / 864e5);
 const fmtDate = iso => iso ? `${DOW[dowOf(iso)]} ${iso.slice(8,10)}/${iso.slice(5,7)}/${iso.slice(0,4)}` : '';
 const fmtShort = iso => iso ? `${DOW[dowOf(iso)]} ${+iso.slice(8,10)} ${MON[+iso.slice(5,7)-1]}` : '';
-// completion time from Gearbox's completed_at (shown in the business time zone it was sent in)
-const timeOf = r => { const m = /T(\d{2}):(\d{2})/.exec(r && r.completedAt || ''); if (!m) return ''; const h = +m[1]; return `${h % 12 || 12}:${m[2]} ${h < 12 ? 'am' : 'pm'}`; };
-const dateTime = r => { const t = timeOf(r); return fmtDate(r.date) + (t ? ` <span class="tm">${t}</span>` : ''); };
+// Prestart times are shown in local Geraldton time (WA, UTC+8, no daylight saving), whatever the
+// viewer's computer is set to. Gearbox sends completed_at in the business time zone (Brisbane).
+const LOCAL_TZ = 'Australia/Perth', LOCAL_TZ_LABEL = 'WA time';
+const tzFmt = new Intl.DateTimeFormat('en-AU', { timeZone:LOCAL_TZ, year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', hourCycle:'h23' });
+function localParts(iso){
+  const d = new Date(iso || ''); if (!iso || isNaN(d)) return null;
+  const p = Object.fromEntries(tzFmt.formatToParts(d).map(x => [x.type, x.value]));
+  return { date:`${p.year}-${p.month}-${p.day}`, hm:`${p.hour}:${p.minute}` };
+}
+const timeOf = r => { if (!r || !r.hm) return ''; const [h, m] = r.hm.split(':').map(Number); return `${h % 12 || 12}:${String(m).padStart(2,'0')} ${h < 12 ? 'am' : 'pm'}`; };
+const dateTime = r => { const t = timeOf(r); return fmtDate(r.date) + (t ? ` <span class="tm" title="Completed ${t} ${LOCAL_TZ_LABEL}">${t}</span>` : ''); };
 const idNum = id => { const n = parseFloat(id); return isNaN(n) ? Infinity : n; };
 
 /* ---------- storage ---------- */
@@ -702,6 +710,8 @@ async function loadServer(quiet){
     const d = await api('/prestarts');
     S.vehicles = new Map((d.vehicles || []).map(v => [v.fleet, v]));
     S.records = (d.records || []).map(fromServer).map(r => {
+      const lp = localParts(r.completedAt);
+      if (lp) { r.date = lp.date; r.hm = lp.hm; }   // Geraldton (WA) date + time
       const v = S.vehicles.get(r.fleet);
       if (v) { if (!r.rego) r.rego = v.rego || ''; if (!r.desc) r.desc = v.desc || ''; if (!r.group) r.group = v.group || ''; }
       return r;
@@ -953,7 +963,7 @@ const COLS = [
 function sortVal(r, k, A){
   switch(k){
     case 'id': return r.missing ? -1 : idNum(r.id);
-    case 'date': return r.date + ' ' + (/T(\d{2}:\d{2})/.exec(r.completedAt || '') || ['', ''])[1];
+    case 'date': return r.date + ' ' + (r.hm || '');
     case 'status': return r.missing ? 0 : r.completed ? 2 : 1;
     case 'delta': return A.delta.has(r.id) ? A.delta.get(r.id) : null;
     case 'flag': return A.flags.has(r.id) ? A.flags.get(r.id)[0].label : '';
@@ -1370,7 +1380,7 @@ function exportCsv(){
   const A = analyse();
   const rows = sortRows(tableRows(A), S.sort, A);
   const q = v => { const s = String(v ?? ''); return /[",\n]/.test(s) ? '"' + s.replace(/"/g,'""') + '"' : s; };
-  const head = ['Groups','SubGroups','Prestart #','Fleet #','Registration','Description','Date','Time','Weekday','Employee','Employee #','Kilometres','Km change','Hours','Type','Status','Time taken','Gearbox Entry','Km issue','Km issue detail','Comment','Comment by','Comment date'];
+  const head = ['Groups','SubGroups','Prestart #','Fleet #','Registration','Description','Date','Time (WA)','Weekday','Employee','Employee #','Kilometres','Km change','Hours','Type','Status','Time taken','Gearbox Entry','Km issue','Km issue detail','Comment','Comment by','Comment date'];
   const lines = [head.join(',')];
   for (const r of rows) {
     const fl = A.flags.get(r.id) || [];
