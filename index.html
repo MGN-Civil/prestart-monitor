@@ -149,6 +149,7 @@ tr:hover .cm-add{opacity:1}
 .cm-input{width:100%;min-width:220px;font:inherit;font-size:13px;border:1px solid var(--accent);border-radius:6px;padding:5px 7px;background:var(--surface);color:var(--text);resize:vertical}
 .cm-actions{display:flex;gap:6px;margin-top:5px}
 .btn.sm{height:26px;padding:0 9px;font-size:12px}
+.tm{color:var(--text-3);font-size:12px;margin-left:4px;font-variant-numeric:tabular-nums}
 .pager{display:flex;align-items:center;gap:10px;justify-content:flex-end;padding:10px 16px;color:var(--text-2);font-size:13px;flex-wrap:wrap}
 .empty-row td{text-align:center;color:var(--text-3);padding:28px}
 
@@ -493,6 +494,9 @@ const addDays = (iso, n) => { const d = new Date(iso + 'T00:00:00Z'); d.setUTCDa
 const daysBetween = (a, b) => Math.round((Date.parse(b) - Date.parse(a)) / 864e5);
 const fmtDate = iso => iso ? `${DOW[dowOf(iso)]} ${iso.slice(8,10)}/${iso.slice(5,7)}/${iso.slice(0,4)}` : '';
 const fmtShort = iso => iso ? `${DOW[dowOf(iso)]} ${+iso.slice(8,10)} ${MON[+iso.slice(5,7)-1]}` : '';
+// completion time from Gearbox's completed_at (shown in the business time zone it was sent in)
+const timeOf = r => { const m = /T(\d{2}):(\d{2})/.exec(r && r.completedAt || ''); if (!m) return ''; const h = +m[1]; return `${h % 12 || 12}:${m[2]} ${h < 12 ? 'am' : 'pm'}`; };
+const dateTime = r => { const t = timeOf(r); return fmtDate(r.date) + (t ? ` <span class="tm">${t}</span>` : ''); };
 const idNum = id => { const n = parseFloat(id); return isNaN(n) ? Infinity : n; };
 
 /* ---------- storage ---------- */
@@ -688,7 +692,7 @@ function fromServer(r){
   return { id:String(r.id), group:r.group||'', subgroup:r.subgroup||'', fleet:r.fleet||'', rego:r.rego||'', desc:r.desc||'',
     date:r.date||'', employee:r.employee||'', empNo:r.empNo != null ? String(r.empNo) : '', km: r.km == null ? null : Number(r.km),
     hours: r.hours == null ? null : Number(r.hours), type:r.type||'', completed: r.completed !== false, timeTaken:r.timeTaken||'',
-    gearbox: !!r.gearbox, notes:r.notes||'', fails: Array.isArray(r.fails) ? r.fails : [], source:r.source||'' };
+    gearbox: !!r.gearbox, notes:r.notes||'', completedAt:r.completedAt||'', fails: Array.isArray(r.fails) ? r.fails : [], source:r.source||'' };
 }
 async function loadServer(quiet){
   if (S.server.loading) return;
@@ -949,6 +953,7 @@ const COLS = [
 function sortVal(r, k, A){
   switch(k){
     case 'id': return r.missing ? -1 : idNum(r.id);
+    case 'date': return r.date + ' ' + (/T(\d{2}:\d{2})/.exec(r.completedAt || '') || ['', ''])[1];
     case 'status': return r.missing ? 0 : r.completed ? 2 : 1;
     case 'delta': return A.delta.has(r.id) ? A.delta.get(r.id) : null;
     case 'flag': return A.flags.has(r.id) ? A.flags.get(r.id)[0].label : '';
@@ -1072,7 +1077,7 @@ function renderTable(A){
     const cls = fl ? 'row-flag' : (!r.completed ? 'row-incomplete' : '');
     return `<tr class="${cls}">
       <td class="num">${esc(r.id)}</td><td><b>${esc(r.fleet)}</b></td><td>${esc(r.rego)}</td><td>${esc(r.desc)}</td>
-      <td>${fmtDate(r.date)}</td><td>${esc(r.employee)}</td>
+      <td>${dateTime(r)}</td><td>${esc(r.employee)}</td>
       <td class="r num ${fl && r.completed ? 'km-bad' : ''}">${fmtN(r.km)}</td>
       <td class="r num ${d != null && (d < 0 || d > S.settings.maxKmPerDay) ? 'km-bad' : 'muted'}">${d != null ? (d > 0 ? '+' : '') + fmtN(d) : ''}</td>
       <td class="r num">${fmtN(r.hours)}</td><td>${statusBadge(r)}</td><td class="muted">${esc(r.timeTaken)}</td><td>${flagHtml(A, r.id)}</td>${commentCell(r)}</tr>`;
@@ -1191,7 +1196,7 @@ function matrixTip(e){
   let h = `<div class="t">${esc(g.key)} · ${fmtDate(cell.d)}</div><div class="row"><i class="sw" style="background:${st[0]}"></i><b>${st[1]}</b></div>`;
   for (const r of cell.list.slice(0,6)) {
     const fl = A.flags.get(r.id);
-    h += `<div class="row" style="margin-top:3px">${r.completed ? '✓' : '○'} ${esc(S.groupBy === 'fleet' ? r.employee : r.fleet)} · ${r.km != null ? fmtN(r.km) + ' km' : ''}${fl ? ` <span class="flag">⚠ ${esc(fl[0].label)}</span>` : ''}</div>`;
+    h += `<div class="row" style="margin-top:3px">${r.completed ? '✓' : '○'} ${timeOf(r) ? timeOf(r) + ' · ' : ''}${esc(S.groupBy === 'fleet' ? r.employee : r.fleet)} · ${r.km != null ? fmtN(r.km) + ' km' : ''}${fl ? ` <span class="flag">⚠ ${esc(fl[0].label)}</span>` : ''}</div>`;
   }
   if (cell.list.length > 6) h += `<div class="row">+${cell.list.length - 6} more</div>`;
   showTip(e, h);
@@ -1259,7 +1264,7 @@ function calTip(e){
   const it = calData.get(c.dataset.d)?.get(c.dataset.k); if (!it) return hideTip();
   const st = { done:['#087a08','Completed prestart'], inc:['var(--warn)','Incomplete only'], miss:['var(--crit)','Missing — no prestart'] }[it.state];
   let h = `<div class="t">${esc(it.label)}${it.fleet && it.fleet !== it.label ? ` <span class="muted">· ${esc(it.fleet)}</span>` : ''}</div><div class="row">${fmtDate(c.dataset.d)}</div><div class="row"><i class="sw" style="background:${st[0]}"></i><b>${st[1]}</b></div>`;
-  for (const r of it.recs.slice(0,5)) h += `<div class="row" style="margin-top:3px">${r.completed ? '✓' : '○'} ${esc(r.employee)}${r.km != null ? ' · ' + fmtN(r.km) + ' km' : ''}${r.timeTaken ? ' · ' + esc(r.timeTaken) : ''}</div>`;
+  for (const r of it.recs.slice(0,5)) h += `<div class="row" style="margin-top:3px">${r.completed ? '✓' : '○'} ${timeOf(r) ? timeOf(r) + ' · ' : ''}${esc(r.employee)}${r.km != null ? ' · ' + fmtN(r.km) + ' km' : ''}${r.timeTaken ? ' · ' + esc(r.timeTaken) : ''}</div>`;
   showTip(e, h);
 }
 
@@ -1291,7 +1296,7 @@ function renderKm(A){
   $('#kmTbl thead').innerHTML = headHtml(cols, S.kmSort);
   $('#kmTbl tbody').innerHTML = rows.length ? rows.map(r => {
     const fl = A.flags.get(r.id); const d = A.delta.get(r.id);
-    return `<tr><td><b>${esc(r.fleet)}</b></td><td>${fmtDate(r.date)}</td><td>${esc(r.employee)}</td><td class="num">${esc(r.id)}</td>
+    return `<tr><td><b>${esc(r.fleet)}</b></td><td>${dateTime(r)}</td><td>${esc(r.employee)}</td><td class="num">${esc(r.id)}</td>
       <td class="r num km-bad">${fmtN(r.km)}</td><td class="r num">${d != null ? (d > 0 ? '+' : '') + fmtN(d) : ''}</td><td class="r num">${fmtN(r.hours)}</td>
       <td>${flagHtml(A, r.id)}</td><td class="wrap-cell muted">${fl.map(f => esc(f.detail)).join('<br>')}</td></tr>`;
   }).join('') : `<tr class="empty-row"><td colspan="${cols.length}">No km discrepancies for the current filters.</td></tr>`;
@@ -1365,12 +1370,12 @@ function exportCsv(){
   const A = analyse();
   const rows = sortRows(tableRows(A), S.sort, A);
   const q = v => { const s = String(v ?? ''); return /[",\n]/.test(s) ? '"' + s.replace(/"/g,'""') + '"' : s; };
-  const head = ['Groups','SubGroups','Prestart #','Fleet #','Registration','Description','Date','Weekday','Employee','Employee #','Kilometres','Km change','Hours','Type','Status','Time taken','Gearbox Entry','Km issue','Km issue detail','Comment','Comment by','Comment date'];
+  const head = ['Groups','SubGroups','Prestart #','Fleet #','Registration','Description','Date','Time','Weekday','Employee','Employee #','Kilometres','Km change','Hours','Type','Status','Time taken','Gearbox Entry','Km issue','Km issue detail','Comment','Comment by','Comment date'];
   const lines = [head.join(',')];
   for (const r of rows) {
     const fl = A.flags.get(r.id) || [];
     const d = r.date ? `${r.date.slice(8,10)}/${r.date.slice(5,7)}/${r.date.slice(0,4)}` : '';
-    lines.push([r.group, r.subgroup, r.id, r.fleet, r.rego, r.desc, d, r.date ? DOW[dowOf(r.date)] : '', r.employee, r.empNo, r.km, A.delta.get(r.id), r.hours, r.type,
+    lines.push([r.group, r.subgroup, r.id, r.fleet, r.rego, r.desc, d, r.missing ? '' : timeOf(r), r.date ? DOW[dowOf(r.date)] : '', r.employee, r.empNo, r.km, A.delta.get(r.id), r.hours, r.type,
       r.missing ? 'Missing' : r.completed ? 'Completed' : 'Incomplete', r.timeTaken, r.missing ? '' : r.gearbox,
       fl.map(f => f.label).join('; '), fl.map(f => f.detail).join(' | '),
       (commentOf(r) || {}).text, (commentOf(r) || {}).by, (commentOf(r) || {}).at].map(q).join(','));
