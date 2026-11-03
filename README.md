@@ -26,9 +26,13 @@ The page is a single `index.html` with no build step. Hosted at https://prestart
 | **Usage by day** | A Mon–Sun stacked bar chart (completed / incomplete only / missing, with % coverage) and a day-by-day calendar heatmap by fleet or by employee. Click a day to open its records. |
 | **Calendar** | Week and Month views listing each vehicle's **rego** per day. Green = completed prestart, grey outline = incomplete, red struck-through = missing. Uses the same filters, e.g. *Show → Completed* for green regos only. |
 | **Km discrepancies** | An odometer chart for each fleet plus a table of flagged readings, each with a plain-English reason. |
+| **Hours discrepancies** | The same for engine hours: an hours chart for each fleet, flagged readings with reasons, and a **Δ hours** column in Records. |
 | **Export** | *Export CSV* downloads the current table view, including flags. *Backup* downloads all data as JSON to move to another browser or device. |
 
-### Km checks
+### Km and hours checks
+
+Hours use the same checks as km, with their own limits (max **24 h/day**, same-day tolerance **2 h**, hours **≤ 10** treated as not entered, all adjustable under *Rules*). A reading where km looks like it went into the hours field is flagged on both.
+
 
 Each fleet's completed prestarts are checked in date order:
 

@@ -316,6 +316,7 @@ details.rules[open] summary::before{transform:rotate(90deg)}
         <option value="incomplete">Incomplete</option>
         <option value="missing">Missing days only</option>
         <option value="kmflag">Km discrepancies</option>
+        <option value="hflag">Hours discrepancies</option>
         <option value="comment">Has comment</option>
       </select>
     </div>
@@ -338,13 +339,16 @@ details.rules[open] summary::before{transform:rotate(90deg)}
       <div class="tiles" id="tiles"></div>
 
       <details class="rules" id="rules">
-        <summary>Rules for missing days &amp; km checks</summary>
+        <summary>Rules for missing days, km &amp; hours checks</summary>
         <div class="rules-b">
           <div class="field"><label>Expected prestart days</label><div class="days" id="setDays"></div></div>
           <label class="check" title="Only count a day as missing between the first and last prestart for that fleet (or employee). Turn off to check the whole date range."><input type="checkbox" id="setActive"> Only within each fleet's active period</label>
           <div class="field"><label for="setMaxKm">Max km per day</label><input class="small" type="number" id="setMaxKm" min="50" step="50"></div>
           <div class="field"><label for="setSameDay">Same-day tolerance (km)</label><input class="small" type="number" id="setSameDay" min="0" step="10"></div>
           <div class="field"><label for="setMinKm">Treat km ≤ as blank</label><input class="small" type="number" id="setMinKm" min="0" step="1"></div>
+          <div class="field"><label for="setMaxHours">Max hours per day</label><input class="small" type="number" id="setMaxHours" min="1" step="1"></div>
+          <div class="field"><label for="setHSameDay">Same-day tolerance (h)</label><input class="small" type="number" id="setHSameDay" min="0" step="1"></div>
+          <div class="field"><label for="setMinHours">Treat hours ≤ as blank</label><input class="small" type="number" id="setMinHours" min="0" step="1"></div>
         </div>
       </details>
 
@@ -353,6 +357,7 @@ details.rules[open] summary::before{transform:rotate(90deg)}
         <button class="tab" role="tab" data-tab="usage" aria-selected="false">Usage by day <span class="count" id="cUsage">0</span></button>
         <button class="tab" role="tab" data-tab="cal" aria-selected="false">Calendar</button>
         <button class="tab" role="tab" data-tab="km" aria-selected="false">Km discrepancies <span class="count" id="cKm">0</span></button>
+        <button class="tab" role="tab" data-tab="hours" aria-selected="false">Hours discrepancies <span class="count" id="cHours">0</span></button>
       </nav>
 
       <section class="panel on" id="p-records">
@@ -440,6 +445,20 @@ details.rules[open] summary::before{transform:rotate(90deg)}
           <div class="tbl-wrap"><table class="grid" id="kmTbl"><thead></thead><tbody></tbody></table></div>
         </div>
       </section>
+
+      <section class="panel" id="p-hours">
+        <div class="card">
+          <div class="card-h">
+            <h2>Engine hours by fleet</h2>
+            <span class="hint">Blue line = consistent readings · red points = flagged (off-scale values are pinned to the edge ▲▼)</span>
+          </div>
+          <div class="card-b"><div class="multiples" id="hMultiples"></div></div>
+        </div>
+        <div class="card">
+          <div class="card-h"><h2>Flagged hours readings</h2><span class="hint" id="hHint"></span></div>
+          <div class="tbl-wrap"><table class="grid" id="hTbl"><thead></thead><tbody></tbody></table></div>
+        </div>
+      </section>
     </div>
   </div>
 </main>
@@ -469,7 +488,7 @@ const SERVER = CONFIG.apiBase && CONFIG.origins.includes(location.origin);
 const STORE_KEY = 'prestartMonitor.v1';
 const DOW = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
 const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-const DEFAULT_SETTINGS = { days:[1,1,1,1,1,1,0], activeOnly:true, maxKmPerDay:1200, sameDayTol:50, minKm:10 };
+const DEFAULT_SETTINGS = { days:[1,1,1,1,1,1,0], activeOnly:true, maxKmPerDay:1200, sameDayTol:50, minKm:10, maxHoursPerDay:24, hoursSameDayTol:2, minHours:10 };
 const PAGE = 100;
 
 const S = {
@@ -479,6 +498,7 @@ const S = {
   f: { fleet:'', emp:'', from:'', to:'', status:'', q:'', missing:true },
   sort: { key:'date', dir:-1 },
   kmSort: { key:'date', dir:-1 },
+  hSort: { key:'date', dir:-1 },
   page: 0,
   tab: 'records',
   groupBy: 'fleet',
@@ -741,76 +761,105 @@ async function uploadFiles(files){
 function setStatus(t){ const el = $('#dataStatus'); if (el) el.textContent = t; }
 
 /* ---------- analysis ---------- */
+// Sequential reading check (used for odometer km and engine hours). For one fleet's valid readings in
+// date order: accept readings that go up by no more than maxPerDay x days; flag rollbacks / jumps; a single
+// bad value between two good ones is flagged once; a change that later readings continue from is a "reset".
+function checkSequence(valid, cfg, addFlag, delta){
+  const v = r => r[cfg.field], U = cfg.unit, L = cfg.label;
+  const desc = r => `${fmtN(v(r))}${cfg.unitShort} on ${fmtShort(r.date)}${r.employee ? ' (' + r.employee + ')' : ''}`;
+  const ok = (a, b) => { const d = Math.max(1, daysBetween(a.date, b.date)); return v(b) >= v(a) && (v(b) - v(a)) <= cfg.maxPerDay * d; };
+  const out = [];
+  let ref = null;
+  for (let i = 0; i < valid.length; i++) {
+    const r = valid[i], nx = valid[i+1], nx2 = valid[i+2];
+    if (!ref) {
+      // first reading: accept unless the following readings agree with each other but not with it
+      if (nx && !ok(r, nx) && nx2 && ok(nx, nx2)) {
+        addFlag(r.id, { kind: v(r) > v(nx) ? 'spike':'rollback', label: v(r) > v(nx) ? `${L} too high` : `${L} too low`, detail:`Doesn't fit the readings that follow (next: ${desc(nx)}).` });
+        out.push({ r, ok:false }); continue;
+      }
+      ref = r; out.push({ r, ok:true }); continue;
+    }
+    if (ok(ref, r)) { delta.set(r.id, v(r) - v(ref)); ref = r; out.push({ r, ok:true }); continue; }
+    const down = v(r) < v(ref);
+    const days = Math.max(1, daysBetween(ref.date, r.date));
+    const diff = v(r) - v(ref);
+    delta.set(r.id, diff);
+    const base = down
+      ? { kind:'rollback', label:`${L} lower than previous`, detail:`${fmtN(-diff)} ${U} below previous reading ${desc(ref)}.` }
+      : { kind:'spike', label:`${L} jump too large`, detail:`+${fmtN(diff)} ${U} in ${days} day${days>1?'s':''} since ${desc(ref)} (limit ${fmtN(cfg.maxPerDay)}${cfg.unitShort}/day).` };
+    if (nx && !ok(ref, nx) && ok(r, nx)) {
+      // following readings continue from this value: sequence changed
+      base.kind = 'reset';
+      base.detail += ` Following readings continue from this value — ${cfg.resetText}.`;
+      addFlag(r.id, base); ref = r; out.push({ r, ok:true, reset:true });
+    } else {
+      addFlag(r.id, base); out.push({ r, ok:false });
+    }
+  }
+  return out;
+}
+
+function sameDayConflicts(recs, cfg, addFlag){
+  const groups = new Map();
+  for (const r of recs) if (r.completed && r[cfg.field] > cfg.minVal) { const k = r.fleet + '|' + r.date; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(r); }
+  for (const g of groups.values()) {
+    if (g.length < 2) continue;
+    for (const r of g) {
+      const others = g.filter(o => o !== r && Math.abs(o[cfg.field] - r[cfg.field]) > cfg.sameDayTol);
+      if (others.length) addFlag(r.id, { kind:'conflict', label:`Conflicting ${cfg.label.toLowerCase()} same day`, detail:`Same fleet, same day: ${others.map(o => `${fmtN(o[cfg.field])}${cfg.unitShort}${o.employee ? ' by ' + o.employee : ''}`).join('; ')}.` });
+    }
+  }
+}
+
 function analyse(){
   if (S.A) return S.A;
   const st = S.settings;
   const recs = S.records.filter(r => r.date);
   const byId = new Map(recs.map(r => [r.id, r]));
-  const flags = new Map();   // id -> [{kind,label,detail}]
+  const flags = new Map();   // id -> [{kind,label,detail}]   (km)
   const delta = new Map();   // id -> km since previous accepted reading
   const series = new Map();  // fleet -> [{r, ok:boolean}]
+  const hFlags = new Map(), hDelta = new Map(), hSeries = new Map();   // same for engine hours
   const addFlag = (id, f) => { if (!flags.has(id)) flags.set(id, []); flags.get(id).push(f); };
-  const cmp = (a,b) => a.date < b.date ? -1 : a.date > b.date ? 1 : idNum(a.id) - idNum(b.id) || (a.id < b.id ? -1 : 1);
+  const addHFlag = (id, f) => { if (!hFlags.has(id)) hFlags.set(id, []); hFlags.get(id).push(f); };
+  const cmp = (a,b) => {
+    if (a.date !== b.date) return a.date < b.date ? -1 : 1;
+    if (a.hm && b.hm && a.hm !== b.hm) return a.hm < b.hm ? -1 : 1;   // same day: by completion time when known
+    return idNum(a.id) - idNum(b.id) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+  };
   const desc = r => `${fmtN(r.km)} on ${fmtShort(r.date)}${r.employee ? ' (' + r.employee + ')' : ''}`;
+  const KM = { field:'km', label:'Km', unit:'km', unitShort:' km', maxPerDay:st.maxKmPerDay, minVal:st.minKm, sameDayTol:st.sameDayTol,
+               resetText:'odometer sequence changed (different vehicle or corrected odometer?)' };
+  const HR = { field:'hours', label:'Hours', unit:'hours', unitShort:' h', maxPerDay:st.maxHoursPerDay, minVal:st.minHours, sameDayTol:st.hoursSameDayTol,
+               resetText:'hour-meter sequence changed (different vehicle or corrected hours?)' };
 
   const fleets = [...new Set(recs.map(r => r.fleet))].filter(Boolean).sort((a,b)=>a.localeCompare(b,undefined,{numeric:true}));
   const accepted = new Map(); // fleet -> accepted readings (for cross-fleet matching)
 
   for (const fl of fleets) {
     const all = recs.filter(r => r.fleet === fl && r.completed).sort(cmp);
-    const valid = [];
+    const valid = [], hValid = [];
     for (const r of all) {
+      const swapped = r.km != null && r.km <= st.minKm && r.hours != null && r.hours > 1000;
       if (r.km == null || r.km <= st.minKm) {
-        const swapped = r.km != null && r.hours != null && r.hours > 1000;
         addFlag(r.id, swapped
           ? { kind:'swap', label:'Km & hours swapped?', detail:`Km entered as ${fmtN(r.km)} while hours = ${fmtN(r.hours)} — looks like the odometer went in the hours field.` }
           : { kind:'nokm', label:'No km entered', detail:`Completed prestart recorded ${r.km == null ? 'no' : fmtN(r.km)} km.` });
       } else valid.push(r);
+      if (swapped) addHFlag(r.id, { kind:'swap', label:'Km & hours swapped?', detail:`Hours entered as ${fmtN(r.hours)} with km = ${fmtN(r.km)} — looks like the odometer went in the hours field.` });
+      else if (r.hours == null || r.hours <= st.minHours) addHFlag(r.id, { kind:'nohours', label:'No hours entered', detail:`Completed prestart recorded ${r.hours == null ? 'no hours' : fmtN(r.hours) + (r.hours === 1 ? ' hour' : ' hours')}.` });
+      else hValid.push(r);
     }
-    const ok = (a, b) => { const d = Math.max(1, daysBetween(a.date, b.date)); return b.km >= a.km && (b.km - a.km) <= st.maxKmPerDay * d; };
-    const out = [];
-    let ref = null;
-    for (let i = 0; i < valid.length; i++) {
-      const r = valid[i], nx = valid[i+1], nx2 = valid[i+2];
-      if (!ref) {
-        // first reading: accept unless the following readings agree with each other but not with it
-        if (nx && !ok(r, nx) && nx2 && ok(nx, nx2)) {
-          addFlag(r.id, { kind: r.km > nx.km ? 'spike':'rollback', label: r.km > nx.km ? 'Km too high' : 'Km too low', detail:`Doesn't fit the readings that follow (next: ${desc(nx)}).` });
-          out.push({ r, ok:false }); continue;
-        }
-        ref = r; out.push({ r, ok:true }); continue;
-      }
-      if (ok(ref, r)) { delta.set(r.id, r.km - ref.km); ref = r; out.push({ r, ok:true }); continue; }
-      const down = r.km < ref.km;
-      const days = Math.max(1, daysBetween(ref.date, r.date));
-      const diff = r.km - ref.km;
-      delta.set(r.id, diff);
-      const base = down
-        ? { kind:'rollback', label:'Km lower than previous', detail:`${fmtN(-diff)} km below previous reading ${desc(ref)}.` }
-        : { kind:'spike', label:'Km jump too large', detail:`+${fmtN(diff)} km in ${days} day${days>1?'s':''} since ${desc(ref)} (limit ${fmtN(st.maxKmPerDay)}/day).` };
-      if (nx && !ok(ref, nx) && ok(r, nx)) {
-        // following readings continue from this value: odometer sequence changed
-        base.kind = 'reset';
-        base.detail += ' Following readings continue from this value — odometer sequence changed (different vehicle or corrected odometer?).';
-        addFlag(r.id, base); ref = r; out.push({ r, ok:true, reset:true });
-      } else {
-        addFlag(r.id, base); out.push({ r, ok:false });
-      }
-    }
+    const out = checkSequence(valid, KM, addFlag, delta);
     series.set(fl, out);
     accepted.set(fl, out.filter(p => p.ok).map(p => p.r));
+    hSeries.set(fl, checkSequence(hValid, HR, addHFlag, hDelta));
   }
+  sameDayConflicts(recs, HR, addHFlag);
 
   // same-day conflicts
-  const dayGroups = new Map();
-  for (const r of recs) if (r.completed && r.km > st.minKm) { const k = r.fleet + '|' + r.date; if (!dayGroups.has(k)) dayGroups.set(k, []); dayGroups.get(k).push(r); }
-  for (const g of dayGroups.values()) {
-    if (g.length < 2) continue;
-    for (const r of g) {
-      const others = g.filter(o => o !== r && Math.abs(o.km - r.km) > st.sameDayTol);
-      if (others.length) addFlag(r.id, { kind:'conflict', label:'Conflicting km same day', detail:`Same fleet, same day: ${others.map(o => `${fmtN(o.km)}${o.employee ? ' by ' + o.employee : ''}`).join('; ')}.` });
-    }
-  }
+  sameDayConflicts(recs, KM, addFlag);
 
   // cross-fleet match: a flagged reading that equals another fleet's reading within ±1 day
   for (const [id, fl] of flags) {
@@ -827,7 +876,8 @@ function analyse(){
   const rego = new Map();
   [...recs].sort(cmp).forEach(r => { if (r.fleet && r.rego) rego.set(r.fleet, r.rego); });
   if (S.vehicles) for (const [fl, v] of S.vehicles) if (v.rego) rego.set(fl, v.rego);   // Gearbox vehicle list wins
-  S.A = { recs, flags, rego, flagged, delta, series, fleets, employees:[...new Set(recs.map(r=>r.employee))].filter(Boolean).sort(),
+  const hFlagged = new Set([...hFlags.keys()]);
+  S.A = { recs, flags, rego, flagged, delta, series, hFlags, hFlagged, hDelta, hSeries, fleets, employees:[...new Set(recs.map(r=>r.employee))].filter(Boolean).sort(),
           minDate: recs.reduce((m,r)=>!m||r.date<m?r.date:m,''), maxDate: recs.reduce((m,r)=>!m||r.date>m?r.date:m,'') };
   return S.A;
 }
@@ -900,7 +950,7 @@ function tableRows(A){
   const st = S.f.status;
   let rows = [];
   if (st !== 'missing') rows = A.recs.filter(matchRec).filter(r =>
-      !st || st === 'comment' || (st === 'completed' && r.completed) || (st === 'incomplete' && !r.completed) || (st === 'kmflag' && A.flagged.has(r.id)));
+      !st || st === 'comment' || (st === 'completed' && r.completed) || (st === 'incomplete' && !r.completed) || (st === 'kmflag' && A.flagged.has(r.id)) || (st === 'hflag' && A.hFlagged.has(r.id)));
   if (st === 'missing' || st === 'comment' || (!st && S.f.missing)) rows = rows.concat(missingRows(A));
   if (st === 'comment') rows = rows.filter(r => commentOf(r));
   return rows;
@@ -955,9 +1005,10 @@ const COLS = [
   { k:'km', t:'Km', num:true, r:true },
   { k:'delta', t:'Δ km', num:true, r:true },
   { k:'hours', t:'Hours', num:true, r:true },
+  { k:'hdelta', t:'Δ hours', num:true, r:true },
   { k:'status', t:'Status' },
   { k:'timeTaken', t:'Time taken' },
-  { k:'flag', t:'Km check' },
+  { k:'flag', t:'Km / hours check' },
   { k:'comment', t:'Comments' }
 ];
 function sortVal(r, k, A){
@@ -966,6 +1017,8 @@ function sortVal(r, k, A){
     case 'date': return r.date + ' ' + (r.hm || '');
     case 'status': return r.missing ? 0 : r.completed ? 2 : 1;
     case 'delta': return A.delta.has(r.id) ? A.delta.get(r.id) : null;
+    case 'hdelta': return A.hDelta.has(r.id) ? A.hDelta.get(r.id) : null;
+    case 'hflag': return A.hFlags.has(r.id) ? A.hFlags.get(r.id)[0].label : '';
     case 'flag': return A.flags.has(r.id) ? A.flags.get(r.id)[0].label : '';
     case 'comment': return (commentOf(r) || {}).text || '';
     default: return r[k];
@@ -1018,6 +1071,7 @@ function render(rebuildOptions){
   if (S.tab === 'records') renderTable(A);
   if (S.tab === 'usage') renderUsage(A);
   if (S.tab === 'km') renderKm(A);
+  if (S.tab === 'hours') renderHours(A);
   if (S.tab === 'cal') renderCal(A);
 }
 
@@ -1034,6 +1088,7 @@ function buildOptions(A){
   $('#setDays').innerHTML = DOW.map((d,i) => `<label><input type="checkbox" data-d="${i}" ${S.settings.days[i] ? 'checked':''}><span>${d}</span></label>`).join('');
   $('#setActive').checked = S.settings.activeOnly;
   $('#setMaxKm').value = S.settings.maxKmPerDay; $('#setSameDay').value = S.settings.sameDayTol; $('#setMinKm').value = S.settings.minKm;
+  $('#setMaxHours').value = S.settings.maxHoursPerDay; $('#setHSameDay').value = S.settings.hoursSameDayTol; $('#setMinHours').value = S.settings.minHours;
   document.querySelectorAll('#groupSeg button').forEach(b => b.setAttribute('aria-pressed', b.dataset.g === S.groupBy));
 }
 
@@ -1043,6 +1098,7 @@ function renderTiles(A){
   const inc = recs.length - done;
   const miss = missingRows(A).length;
   const kmf = recs.filter(r => A.flagged.has(r.id)).length;
+  const hf = recs.filter(r => A.hFlagged.has(r.id)).length;
   const { from, to } = range(A);
   const U = usage(S.f.emp ? 'employee' : 'fleet', A, from, to);
   let exp = 0, ok = 0;
@@ -1053,14 +1109,17 @@ function renderTiles(A){
     <div class="tile" data-go="completed"><div class="k"><i class="dot" style="background:var(--good)"></i>Completed</div><div class="v num">${fmtN(done)}</div><div class="s">${recs.length ? Math.round(done/recs.length*100) : 0}% of submissions</div></div>
     <div class="tile" data-go="incomplete"><div class="k"><i class="dot" style="background:var(--warn)"></i>Incomplete</div><div class="v num">${fmtN(inc)}</div><div class="s">started, not finished</div></div>
     <div class="tile" data-go="missing"><div class="k"><i class="dot" style="background:var(--crit)"></i>Missing days</div><div class="v num">${fmtN(miss)}</div><div class="s">${pct}% of expected days covered</div></div>
-    <div class="tile" data-go="kmflag"><div class="k"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--crit)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>Km discrepancies</div><div class="v num">${fmtN(kmf)}</div><div class="s">readings flagged</div></div>`;
+    <div class="tile" data-go="kmflag"><div class="k"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--crit)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>Km discrepancies</div><div class="v num">${fmtN(kmf)}</div><div class="s">readings flagged</div></div>
+    <div class="tile" data-go="hflag"><div class="k"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--crit)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>Hours discrepancies</div><div class="v num">${fmtN(hf)}</div><div class="s">readings flagged</div></div>`;
   $('#cRecords').textContent = fmtN(tableRows(A).length);
   $('#cUsage').textContent = fmtN(miss); $('#cUsage').classList.toggle('bad', miss > 0);
   $('#cKm').textContent = fmtN(kmf); $('#cKm').classList.toggle('bad', kmf > 0);
+  $('#cHours').textContent = fmtN(hf); $('#cHours').classList.toggle('bad', hf > 0);
 }
 
-function flagHtml(A, id){
-  const fl = A.flags.get(id); if (!fl) return '';
+function flagHtml(A, id, which){
+  const fl = which === 'hours' ? A.hFlags.get(id) : which === 'km' ? A.flags.get(id) : [...(A.flags.get(id) || []), ...(A.hFlags.get(id) || [])];
+  if (!fl || !fl.length) return '';
   return fl.map(f => `<div class="${f.kind === 'match' ? '' : 'flag'}" title="${esc(f.detail)}">${f.kind === 'match' ? '↔' : '⚠'} ${esc(f.label)}</div>`).join('');
 }
 function statusBadge(r){
@@ -1081,16 +1140,18 @@ function renderTable(A){
   const slice = rows.slice(S.page * PAGE, S.page * PAGE + PAGE);
   $('#tbl thead').innerHTML = headHtml(COLS, S.sort);
   $('#tbl tbody').innerHTML = slice.length ? slice.map(r => {
-    if (r.missing) return `<tr class="row-missing"><td class="muted">—</td><td><b>${esc(r.fleet)}</b></td><td></td><td class="muted">No prestart recorded</td><td>${fmtDate(r.date)}</td><td>${esc(r.employee)}</td><td></td><td></td><td></td><td>${statusBadge(r)}</td><td></td><td></td>${commentCell(r)}</tr>`;
-    const fl = A.flagged.has(r.id);
-    const d = A.delta.get(r.id);
-    const cls = fl ? 'row-flag' : (!r.completed ? 'row-incomplete' : '');
+    if (r.missing) return `<tr class="row-missing"><td class="muted">—</td><td><b>${esc(r.fleet)}</b></td><td></td><td class="muted">No prestart recorded</td><td>${fmtDate(r.date)}</td><td>${esc(r.employee)}</td><td></td><td></td><td></td><td></td><td>${statusBadge(r)}</td><td></td><td></td>${commentCell(r)}</tr>`;
+    const fl = A.flagged.has(r.id), hfl = A.hFlagged.has(r.id);
+    const d = A.delta.get(r.id), hd = A.hDelta.get(r.id);
+    const cls = fl || hfl ? 'row-flag' : (!r.completed ? 'row-incomplete' : '');
     return `<tr class="${cls}">
       <td class="num">${esc(r.id)}</td><td><b>${esc(r.fleet)}</b></td><td>${esc(r.rego)}</td><td>${esc(r.desc)}</td>
       <td>${dateTime(r)}</td><td>${esc(r.employee)}</td>
       <td class="r num ${fl && r.completed ? 'km-bad' : ''}">${fmtN(r.km)}</td>
       <td class="r num ${d != null && (d < 0 || d > S.settings.maxKmPerDay) ? 'km-bad' : 'muted'}">${d != null ? (d > 0 ? '+' : '') + fmtN(d) : ''}</td>
-      <td class="r num">${fmtN(r.hours)}</td><td>${statusBadge(r)}</td><td class="muted">${esc(r.timeTaken)}</td><td>${flagHtml(A, r.id)}</td>${commentCell(r)}</tr>`;
+      <td class="r num ${hfl && r.completed ? 'km-bad' : ''}">${fmtN(r.hours)}</td>
+      <td class="r num ${hd != null && (hd < 0 || hd > S.settings.maxHoursPerDay) ? 'km-bad' : 'muted'}">${hd != null ? (hd > 0 ? '+' : '') + fmtN(hd) : ''}</td>
+      <td>${statusBadge(r)}</td><td class="muted">${esc(r.timeTaken)}</td><td>${flagHtml(A, r.id)}</td>${commentCell(r)}</tr>`;
   }).join('') : `<tr class="empty-row"><td colspan="${COLS.length}">No records match the filters.</td></tr>`;
   $('#pager').innerHTML = rows.length > PAGE
     ? `<span>${fmtN(S.page*PAGE+1)}–${fmtN(Math.min(rows.length,(S.page+1)*PAGE))} of ${fmtN(rows.length)}</span><button class="btn" data-p="-1" ${S.page===0?'disabled':''}>Prev</button><button class="btn" data-p="1" ${S.page>=pages-1?'disabled':''}>Next</button>`
@@ -1279,66 +1340,81 @@ function calTip(e){
 }
 
 /* --- km tab --- */
-function renderKm(A){
+// Per-fleet charts + flagged-readings table, shared by the Km and Hours tabs
+const SERIES = {
+  km:    { field:'km', label:'Km', unit:'km', series:'series', flags:'flags', flagged:'flagged', delta:'delta', sort:'kmSort',
+           mult:'#multiples', tbl:'#kmTbl', hint:'#kmHint', used:'km travelled', aria:'Odometer readings', compact:true },
+  hours: { field:'hours', label:'Hours', unit:'h', series:'hSeries', flags:'hFlags', flagged:'hFlagged', delta:'hDelta', sort:'hSort',
+           mult:'#hMultiples', tbl:'#hTbl', hint:'#hHint', used:'engine hours', aria:'Engine hours readings', compact:false }
+};
+function renderKm(A){ renderSeries(A, SERIES.km); }
+function renderHours(A){ renderSeries(A, SERIES.hours); }
+function renderSeries(A, C){
   const { from, to } = range(A);
   let fleets = A.fleets;
   if (S.f.fleet) fleets = fleets.filter(f => f === S.f.fleet);
   if (S.f.emp) { const fs = new Set(A.recs.filter(r => r.employee === S.f.emp).map(r => r.fleet)); fleets = fleets.filter(f => fs.has(f)); }
-  const mult = $('#multiples');
+  const mult = $(C.mult), flagged = A[C.flagged], flags = A[C.flags], delta = A[C.delta];
   const charts = [];
   mult.innerHTML = fleets.map((fl, i) => {
-    const pts = (A.series.get(fl) || []).filter(p => p.r.date >= from && p.r.date <= to);
-    const flaggedHere = A.recs.filter(r => r.fleet === fl && matchRec(r) && A.flagged.has(r.id)).length;
+    const pts = (A[C.series].get(fl) || []).filter(p => p.r.date >= from && p.r.date <= to);
+    const flaggedHere = A.recs.filter(r => r.fleet === fl && matchRec(r) && flagged.has(r.id)).length;
     const okPts = pts.filter(p => p.ok);
-    const travelled = okPts.length > 1 ? okPts[okPts.length-1].r.km - okPts[0].r.km : 0;
+    const used = okPts.length > 1 ? okPts[okPts.length-1].r[C.field] - okPts[0].r[C.field] : 0;
     charts.push({ fl, pts });
-    return `<div class="mini"><div class="mini-h"><b>${esc(fl)}</b><span class="s">${okPts.length ? fmtN(travelled) + ' km travelled' : 'no readings'}</span>${flaggedHere ? `<span class="bad">⚠ ${flaggedHere} flagged</span>` : '<span class="ok">✓ no issues</span>'}</div><div class="chart-box" data-c="${i}"></div></div>`;
+    return `<div class="mini"><div class="mini-h"><b>${esc(fl)}</b><span class="s">${okPts.length ? fmtN(used) + ' ' + C.used : 'no readings'}</span>${flaggedHere ? `<span class="bad">⚠ ${flaggedHere} flagged</span>` : '<span class="ok">✓ no issues</span>'}</div><div class="chart-box" data-c="${i}"></div></div>`;
   }).join('') || '<div class="muted">No fleets match the filters.</div>';
-  charts.forEach((c, i) => drawOdo(mult.querySelector(`[data-c="${i}"]`), c.pts, from, to));
+  charts.forEach((c, i) => drawOdo(mult.querySelector(`[data-c="${i}"]`), c.pts, from, to, C));
 
   // flagged table
-  const rows = A.recs.filter(r => matchRec(r) && A.flagged.has(r.id));
+  const rows = A.recs.filter(r => matchRec(r) && flagged.has(r.id));
+  const other = C.field === 'km' ? { k:'hours', t:'Hours' } : { k:'km', t:'Km' };
   const cols = [
     { k:'fleet', t:'Fleet #' }, { k:'date', t:'Date' }, { k:'employee', t:'Employee' }, { k:'id', t:'Prestart #', num:true },
-    { k:'km', t:'Km', num:true, r:true }, { k:'delta', t:'Δ km', num:true, r:true }, { k:'hours', t:'Hours', num:true, r:true }, { k:'flag', t:'Issue' }, { k:'detail', t:'Detail' }
+    { k:C.field, t:C.label, num:true, r:true }, { k:C.field === 'km' ? 'delta' : 'hdelta', t:'Δ ' + C.label.toLowerCase(), num:true, r:true },
+    { ...other, num:true, r:true }, { k:C.field === 'km' ? 'flag' : 'hflag', t:'Issue' }, { k:'detail', t:'Detail' }
   ];
-  sortRows(rows, S.kmSort.key === 'detail' ? { key:'flag', dir:S.kmSort.dir } : S.kmSort, A);
-  $('#kmTbl thead').innerHTML = headHtml(cols, S.kmSort);
-  $('#kmTbl tbody').innerHTML = rows.length ? rows.map(r => {
-    const fl = A.flags.get(r.id); const d = A.delta.get(r.id);
+  const sortState = S[C.sort];
+  sortRows(rows, sortState.key === 'detail' ? { key: C.field === 'km' ? 'flag' : 'hflag', dir:sortState.dir } : sortState, A);
+  $(C.tbl + ' thead').innerHTML = headHtml(cols, sortState);
+  $(C.tbl + ' tbody').innerHTML = rows.length ? rows.map(r => {
+    const fl = flags.get(r.id); const d = delta.get(r.id);
     return `<tr><td><b>${esc(r.fleet)}</b></td><td>${dateTime(r)}</td><td>${esc(r.employee)}</td><td class="num">${esc(r.id)}</td>
-      <td class="r num km-bad">${fmtN(r.km)}</td><td class="r num">${d != null ? (d > 0 ? '+' : '') + fmtN(d) : ''}</td><td class="r num">${fmtN(r.hours)}</td>
-      <td>${flagHtml(A, r.id)}</td><td class="wrap-cell muted">${fl.map(f => esc(f.detail)).join('<br>')}</td></tr>`;
-  }).join('') : `<tr class="empty-row"><td colspan="${cols.length}">No km discrepancies for the current filters.</td></tr>`;
-  $('#kmHint').textContent = `${rows.length} reading${rows.length===1?'':'s'} · checks: blank km, km lower than previous, jump over ${fmtN(S.settings.maxKmPerDay)} km/day, same-day conflicts over ${fmtN(S.settings.sameDayTol)} km`;
+      <td class="r num km-bad">${fmtN(r[C.field])}</td><td class="r num">${d != null ? (d > 0 ? '+' : '') + fmtN(d) : ''}</td><td class="r num">${fmtN(r[other.k])}</td>
+      <td>${flagHtml(A, r.id, C.field)}</td><td class="wrap-cell muted">${fl.map(f => esc(f.detail)).join('<br>')}</td></tr>`;
+  }).join('') : `<tr class="empty-row"><td colspan="${cols.length}">No ${C.label.toLowerCase()} discrepancies for the current filters.</td></tr>`;
+  const st = S.settings;
+  $(C.hint).textContent = `${rows.length} reading${rows.length===1?'':'s'} · checks: ` + (C.field === 'km'
+    ? `blank km, km lower than previous, jump over ${fmtN(st.maxKmPerDay)} km/day, same-day conflicts over ${fmtN(st.sameDayTol)} km`
+    : `blank hours, hours lower than previous, jump over ${fmtN(st.maxHoursPerDay)} h/day, same-day conflicts over ${fmtN(st.hoursSameDayTol)} h`);
 }
 
-function drawOdo(box, pts, from, to){
+function drawOdo(box, pts, from, to, C = SERIES.km){
   const width = Math.max(260, box.clientWidth || 320), height = 150;
   const m = { l:52, r:10, t:10, b:22 };
   const iw = width - m.l - m.r, ih = height - m.t - m.b;
+  const val = p => p.r[C.field];
   if (!pts.length) { box.innerHTML = `<svg viewBox="0 0 ${width} ${height}"><text class="lbl" x="${width/2}" y="${height/2}" text-anchor="middle">No completed readings in range</text></svg>`; return; }
-  const okKm = pts.filter(p => p.ok).map(p => p.r.km);
-  let lo = Math.min(...(okKm.length ? okKm : pts.map(p => p.r.km))), hi = Math.max(...(okKm.length ? okKm : pts.map(p => p.r.km)));
-  if (hi === lo) { hi += 100; lo -= 100; }
+  const okV = pts.filter(p => p.ok).map(val);
+  let lo = Math.min(...(okV.length ? okV : pts.map(val))), hi = Math.max(...(okV.length ? okV : pts.map(val)));
+  if (hi === lo) { const pad = C.field === 'km' ? 100 : 10; hi += pad; lo -= pad; }
   const padK = (hi - lo) * 0.12; lo -= padK; hi += padK;
   const span = Math.max(1, daysBetween(from, to));
   const x = d => m.l + daysBetween(from, d) / span * iw;
   const y = v => m.t + ih - (v - lo) / (hi - lo) * ih;
-  let s = `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Odometer readings">`;
+  let s = `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${C.aria}">`;
   const step = niceStep((hi - lo) / 3);
-  for (let v = Math.ceil(lo / step) * step; v <= hi; v += step) s += `<line class="gridline" x1="${m.l}" x2="${width-m.r}" y1="${y(v)}" y2="${y(v)}"/><text class="lbl" x="${m.l-6}" y="${y(v)+4}" text-anchor="end">${v >= 10000 ? fmtN(Math.round(v/1000)) + 'k' : fmtN(v)}</text>`;
+  for (let v = Math.ceil(lo / step) * step; v <= hi; v += step) s += `<line class="gridline" x1="${m.l}" x2="${width-m.r}" y1="${y(v)}" y2="${y(v)}"/><text class="lbl" x="${m.l-6}" y="${y(v)+4}" text-anchor="end">${C.compact && v >= 10000 ? fmtN(Math.round(v/1000)) + 'k' : fmtN(v)}</text>`;
   s += `<g class="ax"><line x1="${m.l}" x2="${width-m.r}" y1="${m.t+ih}" y2="${m.t+ih}"/></g>`;
   s += `<text class="lbl" x="${m.l}" y="${height-6}">${fmtShort(from)}</text><text class="lbl" x="${width-m.r}" y="${height-6}" text-anchor="end">${fmtShort(to)}</text>`;
   // accepted line, broken at sequence resets
   let path = '';
-  pts.forEach(p => { if (!p.ok) return; path += (path && !p.reset ? 'L' : 'M') + x(p.r.date).toFixed(1) + ',' + y(p.r.km).toFixed(1); });
+  pts.forEach(p => { if (!p.ok) return; path += (path && !p.reset ? 'L' : 'M') + x(p.r.date).toFixed(1) + ',' + y(val(p)).toFixed(1); });
   s += `<path class="line" d="${path}"/>`;
-  const A = analyse();
+  const A = analyse(), flagged = A[C.flagged], flags = A[C.flags], delta = A[C.delta];
   pts.forEach((p, i) => {
-    const flagged = A.flagged.has(p.r.id);
-    const px = x(p.r.date); let py = y(p.r.km);
-    if (!flagged) { s += `<circle class="pt" cx="${px}" cy="${py}" r="2"/>`; }
+    const px = x(p.r.date); let py = y(val(p));
+    if (!flagged.has(p.r.id)) { s += `<circle class="pt" cx="${px}" cy="${py}" r="2"/>`; }
     else if (py < m.t) s += `<path class="pt-bad" d="M${px-5},${m.t+6} L${px},${m.t-3} L${px+5},${m.t+6}Z"/>`;
     else if (py > m.t + ih) s += `<path class="pt-bad" d="M${px-5},${m.t+ih-6} L${px},${m.t+ih+3} L${px+5},${m.t+ih-6}Z"/>`;
     else s += `<circle class="pt-bad" cx="${px}" cy="${py}" r="4.5"/>`;
@@ -1348,9 +1424,9 @@ function drawOdo(box, pts, from, to){
   box.innerHTML = s;
   box.onmousemove = e => {
     const t = e.target.closest('[data-i]'); if (!t) return hideTip();
-    const p = pts[+t.dataset.i], fl = A.flags.get(p.r.id), d = A.delta.get(p.r.id);
-    showTip(e, `<div class="t">${esc(p.r.fleet)} · ${fmtDate(p.r.date)}</div>
-      <div class="row">Km <b>${fmtN(p.r.km)}</b>${d != null ? ` <span class="muted">(${d > 0 ? '+' : ''}${fmtN(d)})</span>` : ''}</div>
+    const p = pts[+t.dataset.i], fl = flags.get(p.r.id), d = delta.get(p.r.id);
+    showTip(e, `<div class="t">${esc(p.r.fleet)} · ${fmtDate(p.r.date)}${timeOf(p.r) ? ' ' + timeOf(p.r) : ''}</div>
+      <div class="row">${C.label} <b>${fmtN(val(p))}</b>${d != null ? ` <span class="muted">(${d > 0 ? '+' : ''}${fmtN(d)})</span>` : ''}</div>
       <div class="row">${esc(p.r.employee)} · #${esc(p.r.id)}</div>
       ${fl ? fl.map(f => `<div class="row" style="margin-top:3px"><span class="${f.kind==='match'?'':'flag'}">${f.kind==='match'?'↔':'⚠'} ${esc(f.label)}</span></div><div class="row" style="font-size:11px">${esc(f.detail)}</div>`).join('') : ''}`);
   };
@@ -1380,14 +1456,15 @@ function exportCsv(){
   const A = analyse();
   const rows = sortRows(tableRows(A), S.sort, A);
   const q = v => { const s = String(v ?? ''); return /[",\n]/.test(s) ? '"' + s.replace(/"/g,'""') + '"' : s; };
-  const head = ['Groups','SubGroups','Prestart #','Fleet #','Registration','Description','Date','Time (WA)','Weekday','Employee','Employee #','Kilometres','Km change','Hours','Type','Status','Time taken','Gearbox Entry','Km issue','Km issue detail','Comment','Comment by','Comment date'];
+  const head = ['Groups','SubGroups','Prestart #','Fleet #','Registration','Description','Date','Time (WA)','Weekday','Employee','Employee #','Kilometres','Km change','Hours','Hours change','Type','Status','Time taken','Gearbox Entry','Km issue','Km issue detail','Hours issue','Hours issue detail','Comment','Comment by','Comment date'];
   const lines = [head.join(',')];
   for (const r of rows) {
     const fl = A.flags.get(r.id) || [];
     const d = r.date ? `${r.date.slice(8,10)}/${r.date.slice(5,7)}/${r.date.slice(0,4)}` : '';
-    lines.push([r.group, r.subgroup, r.id, r.fleet, r.rego, r.desc, d, r.missing ? '' : timeOf(r), r.date ? DOW[dowOf(r.date)] : '', r.employee, r.empNo, r.km, A.delta.get(r.id), r.hours, r.type,
+    lines.push([r.group, r.subgroup, r.id, r.fleet, r.rego, r.desc, d, r.missing ? '' : timeOf(r), r.date ? DOW[dowOf(r.date)] : '', r.employee, r.empNo, r.km, A.delta.get(r.id), r.hours, A.hDelta.get(r.id), r.type,
       r.missing ? 'Missing' : r.completed ? 'Completed' : 'Incomplete', r.timeTaken, r.missing ? '' : r.gearbox,
       fl.map(f => f.label).join('; '), fl.map(f => f.detail).join(' | '),
+      (A.hFlags.get(r.id) || []).map(f => f.label).join('; '), (A.hFlags.get(r.id) || []).map(f => f.detail).join(' | '),
       (commentOf(r) || {}).text, (commentOf(r) || {}).by, (commentOf(r) || {}).at].map(q).join(','));
   }
   download(`prestarts_${new Date().toISOString().slice(0,10)}.csv`, '﻿' + lines.join('\r\n'), 'text/csv');
@@ -1418,9 +1495,10 @@ document.querySelectorAll('.tab').forEach(b => b.addEventListener('click', () =>
 $('#tiles').addEventListener('click', e => {
   const t = e.target.closest('[data-go]'); if (!t) return;
   S.f.status = t.dataset.go; syncFilterInputs(); S.page = 0;
-  setTab(t.dataset.go === 'kmflag' ? 'km' : t.dataset.go === 'missing' ? 'usage' : 'records');
+  setTab(t.dataset.go === 'kmflag' ? 'km' : t.dataset.go === 'hflag' ? 'hours' : t.dataset.go === 'missing' ? 'usage' : 'records');
 });
 $('#tbl thead').addEventListener('click', e => { const th = e.target.closest('th[data-k]'); if (!th) return; const k = th.dataset.k; S.sort = { key:k, dir: S.sort.key === k ? -S.sort.dir : (k === 'date' ? -1 : 1) }; renderTable(analyse()); });
+$('#hTbl thead').addEventListener('click', e => { const th = e.target.closest('th[data-k]'); if (!th) return; const k = th.dataset.k; S.hSort = { key:k, dir: S.hSort.key === k ? -S.hSort.dir : (k === 'date' ? -1 : 1) }; renderHours(analyse()); });
 $('#kmTbl thead').addEventListener('click', e => { const th = e.target.closest('th[data-k]'); if (!th) return; const k = th.dataset.k; S.kmSort = { key:k, dir: S.kmSort.key === k ? -S.kmSort.dir : (k === 'date' ? -1 : 1) }; renderKm(analyse()); });
 $('#tbl tbody').addEventListener('click', e => {
   const td = e.target.closest('td.cm'); if (!td) return;
@@ -1465,7 +1543,10 @@ function onRules(){
     activeOnly: $('#setActive').checked,
     maxKmPerDay: Math.max(50, n('#setMaxKm', DEFAULT_SETTINGS.maxKmPerDay)),
     sameDayTol: Math.max(0, n('#setSameDay', DEFAULT_SETTINGS.sameDayTol)),
-    minKm: Math.max(0, n('#setMinKm', DEFAULT_SETTINGS.minKm))
+    minKm: Math.max(0, n('#setMinKm', DEFAULT_SETTINGS.minKm)),
+    maxHoursPerDay: Math.max(1, n('#setMaxHours', DEFAULT_SETTINGS.maxHoursPerDay)),
+    hoursSameDayTol: Math.max(0, n('#setHSameDay', DEFAULT_SETTINGS.hoursSameDayTol)),
+    minHours: Math.max(0, n('#setMinHours', DEFAULT_SETTINGS.minHours))
   };
   S.A = null; save(); render();
 }
