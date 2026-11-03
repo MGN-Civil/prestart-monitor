@@ -27,6 +27,7 @@ The page is a single `index.html` with no build step. Hosted at https://prestart
 | **Calendar** | Week and Month views listing each vehicle's **rego** per day. Green = completed prestart, grey outline = incomplete, red struck-through = missing. Uses the same filters, e.g. *Show → Completed* for green regos only. |
 | **Km discrepancies** | An odometer chart for each fleet plus a table of flagged readings, each with a plain-English reason. |
 | **Hours discrepancies** | The same for engine hours: an hours chart for each fleet, flagged readings with reasons, and a **Δ hours** column in Records. |
+| **Alerts & reports** *(live mode)* | Emails the supervisor when a truck **leaves base without a prestart**, and sends a **daily report** at a set Brisbane time. Recipients, base geofence, grace period, report time and days are set in the app; includes test buttons and a log of departures and truck movements. |
 | **Export** | *Export CSV* downloads the current table view, including flags. *Backup* downloads all data as JSON to move to another browser or device. |
 
 ### Km and hours checks
@@ -81,11 +82,27 @@ The Gearbox public API cannot *read* prestarts (the endpoint is create-only), so
 | DynamoDB | `PrestartMonitor` (prestarts + `vehicle#…` items) |
 | Secrets Manager | `prestart-monitor/gearbox` |
 | Sign-in | Cognito pool `contractorportal` (Microsoft SAML IdP), app client `prestart-monitor` |
-| Schedule | EventBridge `prestart-monitor-vehicle-sync` (daily 05:00 AEST) |
+| Schedule | EventBridge `prestart-monitor-vehicle-sync` (daily 05:00 AEST) and `prestart-monitor-tick` (every 5 min: alerts + report) |
+| Email | Amazon SES, domain `mgncivil.com.au` |
 
 **Vehicle filter.** `GET /prestarts` only returns prestarts for vehicles matching the Lambda environment variables `FILTER_SUBGROUPS` (currently `Geraldton`) and `FILTER_TYPES` (currently `Prime Mover`), plus optional `FILTER_GROUPS`. The values are comma-separated, case-insensitive and matched against the Gearbox vehicle list. Every prestart is still stored, so changing the filter (Lambda → Configuration → Environment variables) takes effect immediately without losing data. Fleets missing from the Gearbox vehicle list are hidden while a filter is set.
 
 **Times.** Prestart times (from the webhook's `completed_at`) are shown in local Geraldton time (Australia/Perth, UTC+8) regardless of the viewer's computer, and the prestart date follows WA time. Change `LOCAL_TZ` in `index.html` to use another zone. Excel-imported history has no time.
+
+### Departure alerts and the daily report
+
+Truck movements come from the **Geraldton opsboard** (`MGN-Civil/opsboard-api`). PACCAR / e.things geofence alert emails reach it via Power Automate; opsboard parses each one and forwards it to `POST /movements` (header `X-Ingest-Token` = `movement_ingest_token` in the secret).
+
+```
+PACCAR geofence email → Power Automate → opsboard /ethings/geofence → POST /movements → DynamoDB
+EventBridge every 5 min → Lambda "tick" → departure checks + daily report → Amazon SES email
+```
+
+- **Departure alert:** when a truck *exits* one of the **base geofences** chosen in *Alerts & reports*, a departure is recorded. Once the **grace period** (default 15 min) has passed, the supervisors are emailed if that truck has no completed prestart that WA day from before it left (plus grace). Imported prestarts without a time count as done for the day. At most one alert per truck per day.
+- **Daily report:** sent within 5 minutes of the set **Brisbane time** (default 10:00) on the selected days (default Mon–Sat). It covers today so far, the last working day, trucks that left without a prestart, km/hours issues (same rules as the page, default limits) and comments from the last 24 h.
+- **Email:** from `Prestart Monitor <noreply@mgncivil.com.au>` via Amazon SES (domain verified). Lambda env `MAIL_FROM` / `APP_URL` change the sender and the link.
+- **Settings:** stored in DynamoDB (`settings#notify`). Any signed-in `@mgncivil.com.au` user can edit them, and the last editor is shown.
+- **Routes:** `GET/PUT /settings`, `POST /notify/test` (`{kind: report|alert}`, sends only to you), `POST /movements` (opsboard only).
 
 **Webhook security.** `REQUIRE_SIGNATURE=true` rejects deliveries whose `X-Gearbox-Signature` doesn't match `webhook_signing_key`.
 
