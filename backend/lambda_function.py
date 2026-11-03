@@ -17,6 +17,8 @@ from decimal import Decimal
 
 import boto3
 
+import notify
+
 TABLE = os.environ.get('TABLE_NAME', 'PrestartMonitor')
 SECRET_ID = os.environ.get('SECRET_ID', 'prestart-monitor/gearbox')
 GEARBOX = os.environ.get('GEARBOX_BASE', 'https://api.gearbox.com.au')
@@ -408,6 +410,46 @@ def handle_api(event, route):
                 n += 1
         print(json.dumps({'msg': 'imported', 'count': n, 'by': email}))
         return resp(200, {'imported': n})
+    if route == 'GET /settings':
+        items = scan_all()
+        st = notify.get_settings(table)
+        since = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=60)).isoformat()
+        geofences = sorted({i.get('geofence') for i in items if i.get('kind') == 'movement' and i.get('geofence')})
+        moves = sorted([i for i in items if i.get('kind') == 'movement' and i.get('at', '') >= since], key=lambda i: i['at'])
+        deps = sorted([i for i in items if i.get('kind') == 'departure' and i.get('at', '') >= since], key=lambda i: i['at'], reverse=True)
+        last = next((i for i in items if i.get('id') == 'report#last'), None)
+        keep = ('fleet', 'geofence', 'at', 'waDate', 'status', 'prestartId', 'alertedTo', 'direction', 'checkAfter')
+        return resp(200, {'settings': st, 'geofencesSeen': geofences,
+                          'departures': [{k: d.get(k) for k in keep} for d in deps[:100]],
+                          'movements': [{k: m.get(k) for k in keep} for m in moves[-30:]][::-1],
+                          'reportLast': {k: last.get(k) for k in ('date', 'at', 'to', 'subject')} if last else None,
+                          'mailFrom': notify.MAIL_FROM})
+    if route == 'PUT /settings':
+        try:
+            body = json.loads(body_of(event) or '{}')
+            return resp(200, {'settings': notify.save_settings(table, body, email)})
+        except ValueError as e:
+            return resp(400, {'error': str(e)})
+    if route == 'POST /notify/test':
+        try:
+            kind = (json.loads(body_of(event) or '{}') or {}).get('kind', 'report')
+        except Exception:
+            kind = 'report'
+        if not email:
+            return resp(400, {'error': 'no email on your sign-in'})
+        items = scan_all()
+        if kind == 'alert':
+            prestarts = [i for i in items if i.get('kind') == 'prestart']
+            fleet = (sorted({i['fleet'] for i in prestarts if i.get('fleet')}) or ['MGN50'])[0]
+            st = notify.get_settings(table)
+            now = dt.datetime.now(dt.timezone.utc)
+            dep = {'fleet': fleet, 'geofence': (st['baseGeofences'] or ['Base'])[0], 'at': now.isoformat(timespec='seconds'),
+                   'waDate': now.astimezone(notify.AWST).date().isoformat()}
+            notify.send_alert([email], dep, notify.latest_prestart(prestarts, fleet))
+        else:
+            subject, html_body, text = notify.build_report(items, allowed_fleets(items), work_days=notify.get_settings(table)['reportDays'])
+            notify.send_email([email], '[TEST] ' + subject, html_body, text)
+        return resp(200, {'sentTo': email, 'kind': kind})
     if route == 'POST /vehicles/sync':
         try:
             return resp(200, {'vehicles': sync_vehicles()})
@@ -417,10 +459,41 @@ def handle_api(event, route):
     return resp(404, {'error': 'not found'})
 
 
+def allowed_fleets(items):
+    """Normalised fleet names in scope (vehicle filter), or None when no filter is set."""
+    flt = vehicle_filter()
+    if not flt:
+        return None
+    return {notify.norm_fleet(i['fleet']) for i in items
+            if i.get('kind') == 'vehicle' and i.get('fleet') and vehicle_matches(i, flt)}
+
+
+def handle_movement(event):
+    """Geofence enter/exit forwarded by the Geraldton opsboard. Token-gated (X-Ingest-Token)."""
+    headers = {k.lower(): v for k, v in (event.get('headers') or {}).items()}
+    expected = secret().get('movement_ingest_token') or ''
+    sent = headers.get('x-ingest-token') or ''
+    if not expected or not hmac.compare_digest(sent, expected):
+        return resp(401, {'error': 'unauthorized'})
+    try:
+        body = json.loads(body_of(event) or '{}')
+    except Exception:
+        return resp(400, {'error': 'invalid json'})
+    evs = body if isinstance(body, list) else [body]
+    out = [notify.ingest_movement(table, e) for e in evs[:50] if isinstance(e, dict)]
+    print(json.dumps({'msg': 'movements', 'results': out}, default=str))
+    return resp(200, {'results': out})
+
+
 def lambda_handler(event, context):
     if event.get('task') == 'sync_vehicles':
         return {'vehicles': sync_vehicles()}
+    if event.get('task') == 'tick':
+        items = scan_all()
+        return notify.tick(table, items, allowed_fleets(items))
     route = event.get('routeKey', '')
     if route.startswith('POST /webhook/'):
         return handle_webhook(event)
+    if route == 'POST /movements':
+        return handle_movement(event)
     return handle_api(event, route)

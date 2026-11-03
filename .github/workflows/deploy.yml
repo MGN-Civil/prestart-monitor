@@ -39,11 +39,11 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Check Lambda syntax
-        run: python3 -m py_compile backend/lambda_function.py
+        run: python3 -m py_compile backend/*.py
 
       - name: Deploy Lambda
         run: |
-          cd backend && zip -q -j ../lambda.zip lambda_function.py && cd ..
+          cd backend && zip -q -j ../lambda.zip *.py && cd ..
           aws lambda update-function-code --function-name "$FUNCTION_NAME" --zip-file fileb://lambda.zip --query 'LastModified' --output text
 
       - name: Deploy page

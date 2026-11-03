@@ -150,6 +150,19 @@ tr:hover .cm-add{opacity:1}
 .cm-actions{display:flex;gap:6px;margin-top:5px}
 .btn.sm{height:26px;padding:0 9px;font-size:12px}
 .tm{color:var(--text-3);font-size:12px;margin-left:4px;font-variant-numeric:tabular-nums}
+.al-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:16px}
+.al-grid .card{margin-bottom:0}
+.al-form{display:flex;flex-direction:column;gap:14px}
+.al-form textarea,.al-form input[type=text]{font:inherit;font-size:13px;border:1px solid var(--border-strong);border-radius:8px;padding:7px 9px;background:var(--surface);color:var(--text);width:100%;resize:vertical}
+.al-form input[type=time]{height:34px;border:1px solid var(--border-strong);border-radius:8px;padding:0 8px;background:var(--surface);color:var(--text);font:inherit}
+.al-row{display:flex;gap:18px;flex-wrap:wrap;align-items:flex-end}
+.al-note{font-size:12px;margin-top:2px;display:block}
+.al-fences{display:flex;flex-wrap:wrap;gap:6px;margin:2px 0 6px}
+.al-fences label{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--border-strong);border-radius:7px;padding:4px 9px;font-size:12.5px;cursor:pointer;user-select:none}
+.al-fences label:has(input:checked){background:var(--accent-soft);border-color:var(--accent);color:var(--accent-ink)}
+.al-fences input{margin:0;accent-color:var(--accent)}
+.field .al-fences label{text-transform:none;letter-spacing:0;font-weight:500;color:var(--text-2)}
+.al-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:16px 0}
 .pager{display:flex;align-items:center;gap:10px;justify-content:flex-end;padding:10px 16px;color:var(--text-2);font-size:13px;flex-wrap:wrap}
 .empty-row td{text-align:center;color:var(--text-3);padding:28px}
 
@@ -358,6 +371,7 @@ details.rules[open] summary::before{transform:rotate(90deg)}
         <button class="tab" role="tab" data-tab="cal" aria-selected="false">Calendar</button>
         <button class="tab" role="tab" data-tab="km" aria-selected="false">Km discrepancies <span class="count" id="cKm">0</span></button>
         <button class="tab" role="tab" data-tab="hours" aria-selected="false">Hours discrepancies <span class="count" id="cHours">0</span></button>
+        <button class="tab" role="tab" data-tab="alerts" aria-selected="false" id="tabAlerts" hidden>Alerts &amp; reports</button>
       </nav>
 
       <section class="panel on" id="p-records">
@@ -443,6 +457,50 @@ details.rules[open] summary::before{transform:rotate(90deg)}
         <div class="card">
           <div class="card-h"><h2>Flagged readings</h2><span class="hint" id="kmHint"></span></div>
           <div class="tbl-wrap"><table class="grid" id="kmTbl"><thead></thead><tbody></tbody></table></div>
+        </div>
+      </section>
+
+      <section class="panel" id="p-alerts">
+        <div class="al-grid">
+          <div class="card">
+            <div class="card-h"><h2>Departure alerts</h2><span class="hint">Email when a truck leaves base without a completed prestart that day</span></div>
+            <div class="card-b al-form">
+              <label class="check"><input type="checkbox" id="alOn"> Send departure alerts</label>
+              <div class="field"><label for="alTo">Supervisor emails</label><textarea id="alTo" rows="2" placeholder="name@mgncivil.com.au, …"></textarea></div>
+              <div class="field"><label>Base geofence(s): a truck <b>leaving</b> one of these triggers the check</label>
+                <div id="alFences" class="al-fences"></div>
+                <input type="text" id="alFenceAdd" placeholder="Add a geofence name exactly as in PACCAR, comma-separated">
+              </div>
+              <div class="field"><label for="alGrace">Grace period (minutes)</label><input class="small" type="number" id="alGrace" min="0" max="240" step="5">
+                <span class="muted al-note">A prestart completed up to this long after leaving still counts; the check runs once the grace period has passed.</span></div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-h"><h2>Daily report</h2><span class="hint" id="rpLast"></span></div>
+            <div class="card-b al-form">
+              <label class="check"><input type="checkbox" id="rpOn"> Email the daily report</label>
+              <div class="field"><label for="rpTo">Recipients</label><textarea id="rpTo" rows="2" placeholder="name@mgncivil.com.au, …"></textarea></div>
+              <div class="al-row">
+                <div class="field"><label for="rpTime">Time (Brisbane)</label><input type="time" id="rpTime" step="300"></div>
+                <div class="field"><label>Days</label><div class="days" id="rpDays"></div></div>
+              </div>
+              <span class="muted al-note">Covers today so far, the last working day, departures without a prestart, km/hours issues and new comments. Sent within 5 minutes of the set time.</span>
+            </div>
+          </div>
+        </div>
+        <div class="al-actions">
+          <button class="btn primary" id="alSave">Save settings</button>
+          <button class="btn" id="alTestReport">Send test report to me</button>
+          <button class="btn" id="alTestAlert">Send test alert to me</button>
+          <span class="muted" id="alStatus"></span>
+        </div>
+        <div class="card">
+          <div class="card-h"><h2>Departures from base</h2><span class="hint">Last 60 days · times in WA</span></div>
+          <div class="tbl-wrap"><table class="grid" id="depTbl"><thead><tr><th>When</th><th>Truck</th><th>Left</th><th>Result</th></tr></thead><tbody></tbody></table></div>
+        </div>
+        <div class="card">
+          <div class="card-h"><h2>Latest truck movements</h2><span class="hint" id="mvHint">From the Geraldton opsboard (PACCAR geofence alerts)</span></div>
+          <div class="tbl-wrap"><table class="grid" id="mvTbl"><thead><tr><th>When</th><th>Truck</th><th>Event</th><th>Geofence</th></tr></thead><tbody></tbody></table></div>
         </div>
       </section>
 
@@ -1072,6 +1130,7 @@ function render(rebuildOptions){
   if (S.tab === 'usage') renderUsage(A);
   if (S.tab === 'km') renderKm(A);
   if (S.tab === 'hours') renderHours(A);
+  if (S.tab === 'alerts') renderAlerts();
   if (S.tab === 'cal') renderCal(A);
 }
 
@@ -1433,6 +1492,74 @@ function drawOdo(box, pts, from, to, C = SERIES.km){
   box.onmouseleave = hideTip;
 }
 
+/* ---------- alerts & reports (live mode) ---------- */
+S.alerts = null;
+const waWhen = iso => { const lp = localParts(iso); return lp ? `${fmtShort(lp.date)} ${timeOf({ hm:lp.hm })}` : ''; };
+async function loadAlerts(){
+  try { S.alerts = await api('/settings'); S.alerts.error = ''; }
+  catch(e) { S.alerts = { error:e.message }; }
+  if (S.tab === 'alerts') renderAlerts();
+}
+function renderAlerts(){
+  if (!SERVER) return;
+  const d = S.alerts;
+  if (!d) { $('#alStatus').textContent = 'Loading…'; loadAlerts(); return; }
+  if (d.error) { $('#alStatus').textContent = d.error; return; }
+  const st = d.settings;
+  $('#alOn').checked = st.alertsEnabled; $('#rpOn').checked = st.reportEnabled;
+  $('#alTo').value = st.supervisorEmails.join(', '); $('#rpTo').value = st.reportEmails.join(', ');
+  $('#alGrace').value = st.graceMinutes; $('#rpTime').value = st.reportTime;
+  const fences = [...new Set([...st.baseGeofences, ...(d.geofencesSeen || [])])].sort((a, b) => a.localeCompare(b));
+  const base = new Set(st.baseGeofences.map(x => x.toLowerCase()));
+  $('#alFences').innerHTML = fences.length ? fences.map(f => `<label><input type="checkbox" value="${esc(f)}" ${base.has(f.toLowerCase()) ? 'checked' : ''}> ${esc(f)}</label>`).join('')
+    : '<span class="muted" style="font-size:12px">No geofences seen yet — they appear here once truck movements arrive from the opsboard. You can also type one below.</span>';
+  $('#alFenceAdd').value = '';
+  $('#rpDays').innerHTML = DOW.map((x, i) => `<label><input type="checkbox" data-d="${i}" ${st.reportDays[i] ? 'checked' : ''}><span>${x}</span></label>`).join('');
+  $('#rpLast').textContent = d.reportLast ? `Last sent ${waWhen(d.reportLast.at)} WA to ${d.reportLast.to}` : 'Not sent yet';
+  $('#alStatus').textContent = st.updatedBy ? `Saved by ${st.updatedBy} · ${new Date(st.updatedAt).toLocaleString('en-AU', { dateStyle:'medium', timeStyle:'short' })} · emails come from ${d.mailFrom}` : `Emails come from ${d.mailFrom}`;
+  const res = x => ({
+    ok: `<span class="badge good"><i class="dot"></i>Prestart done</span> <span class="muted">#${esc(x.prestartId || '')}</span>`,
+    alerted: `<span class="badge crit"><i class="dot"></i>Alert sent</span> <span class="muted">${esc(x.alertedTo || '')}</span>`,
+    repeat: '<span class="badge warn"><i class="dot"></i>No prestart</span> <span class="muted">already alerted today</span>',
+    'no-recipients': '<span class="badge crit"><i class="dot"></i>No prestart</span> <span class="muted">no supervisor emails set</span>',
+    disabled: '<span class="badge crit"><i class="dot"></i>No prestart</span> <span class="muted">alerts were off</span>',
+    pending: `<span class="badge"><i class="dot" style="background:var(--text-3)"></i>Checking</span> <span class="muted">after ${esc(timeOf({ hm:(localParts(x.checkAfter) || {}).hm }))}</span>`
+  })[x.status] || esc(x.status);
+  $('#depTbl tbody').innerHTML = (d.departures || []).length
+    ? d.departures.map(x => `<tr><td>${esc(waWhen(x.at))}</td><td><b>${esc(x.fleet)}</b></td><td>${esc(x.geofence)}</td><td>${res(x)}</td></tr>`).join('')
+    : `<tr class="empty-row"><td colspan="4">${st.baseGeofences.length ? 'No departures from base yet.' : 'Choose a base geofence above to start checking departures.'}</td></tr>`;
+  $('#mvTbl tbody').innerHTML = (d.movements || []).length
+    ? d.movements.map(x => `<tr><td>${esc(waWhen(x.at))}</td><td><b>${esc(x.fleet)}</b></td><td>${x.direction === 'exit' ? '↗ Left' : '↘ Arrived'}</td><td>${esc(x.geofence)}</td></tr>`).join('')
+    : '<tr class="empty-row"><td colspan="4">No truck movements received yet. The Geraldton opsboard forwards PACCAR geofence events here once it is connected.</td></tr>';
+}
+function alertsForm(){
+  const typed = $('#alFenceAdd').value.split(',').map(x => x.trim()).filter(Boolean);
+  return {
+    alertsEnabled: $('#alOn').checked, reportEnabled: $('#rpOn').checked,
+    supervisorEmails: $('#alTo').value, reportEmails: $('#rpTo').value,
+    baseGeofences: [...[...document.querySelectorAll('#alFences input:checked')].map(i => i.value), ...typed],
+    graceMinutes: +$('#alGrace').value || 0, reportTime: $('#rpTime').value || '10:00',
+    reportDays: [...document.querySelectorAll('#rpDays input')].map(i => i.checked ? 1 : 0)
+  };
+}
+async function saveAlerts(){
+  const btn = $('#alSave'); btn.disabled = true;
+  try {
+    const r = await api('/settings', { method:'PUT', headers:{ 'Content-Type':'application/json' }, body:JSON.stringify(alertsForm()) });
+    S.alerts.settings = r.settings;
+    const typedBad = $('#alTo').value + ',' + $('#rpTo').value;
+    const kept = new Set([...r.settings.supervisorEmails, ...r.settings.reportEmails]);
+    const dropped = typedBad.split(/[,;\s]+/).map(x => x.trim().toLowerCase()).filter(x => x && !kept.has(x));
+    toast(dropped.length ? `Saved — ignored invalid email(s): ${dropped.join(', ')}` : 'Alert & report settings saved', !!dropped.length);
+    await loadAlerts();
+  } catch(e) { toast(e.message, true); }
+  btn.disabled = false;
+}
+async function testNotify(kind){
+  try { const r = await api('/notify/test', { method:'POST', headers:{ 'Content-Type':'application/json' }, body:JSON.stringify({ kind }) }); toast(`Test ${kind} sent to ${r.sentTo}`); }
+  catch(e) { toast(e.message, true); }
+}
+
 /* ---------- tooltip / toast ---------- */
 const tip = $('#tip');
 function showTip(e, html){
@@ -1571,7 +1698,11 @@ let rT; addEventListener('resize', () => { clearTimeout(rT); rT = setTimeout(() 
 load();
 render(true);
 if (SERVER) {
-  $('#btnRefresh').addEventListener('click', () => loadServer());
+  $('#tabAlerts').hidden = false;
+  $('#alSave').addEventListener('click', saveAlerts);
+  $('#alTestReport').addEventListener('click', () => testNotify('report'));
+  $('#alTestAlert').addEventListener('click', () => testNotify('alert'));
+  $('#btnRefresh').addEventListener('click', () => { loadServer(); if (S.tab === 'alerts') loadAlerts(); });
   $('#userBox').addEventListener('click', e => { if (e.target.id === 'lnkOut') logout(); });
   (async () => {
     try { await handleRedirect(); await idToken(); await loadServer(); }
