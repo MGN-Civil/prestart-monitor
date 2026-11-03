@@ -374,8 +374,16 @@ def handle_api(event, route):
         vsync = max((i.get('updatedAt', '') for i in items if i.get('kind') == 'vehicle'), default='')
         comments = {i['key']: {'text': i.get('text', ''), 'by': i.get('by', ''), 'at': i.get('at', '')}
                     for i in items if i.get('kind') == 'comment' and i.get('key')}
+        # departures from base (truck park) for the "Left" time and "left without prestart" rows
+        since = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=120)).isoformat()
+        allowed = {notify.norm_fleet(v['fleet']) for v in vehicles} if flt else None
+        deps = [{k: i.get(k) for k in ('fleet', 'at', 'waDate', 'geofence', 'status', 'prestartId', 'demo') if i.get(k) is not None}
+                for i in items if i.get('kind') == 'departure' and i.get('at', '') >= since
+                and (allowed is None or notify.norm_fleet(i.get('fleet')) in allowed)]
+        base = notify.get_settings(table)['baseGeofences']
         return resp(200, {'records': recs, 'vehicles': vehicles, 'updatedAt': latest, 'vehiclesUpdatedAt': vsync, 'user': email,
-                          'filter': {k: sorted(v) for k, v in flt.items()}, 'comments': comments})
+                          'filter': {k: sorted(v) for k, v in flt.items()}, 'comments': comments,
+                          'departures': deps, 'baseGeofences': base})
     if route == 'POST /comments':
         try:
             b = json.loads(body_of(event) or '{}')

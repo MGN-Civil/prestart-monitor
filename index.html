@@ -163,6 +163,7 @@ tr:hover .cm-add{opacity:1}
 .al-fences input{margin:0;accent-color:var(--accent)}
 .field .al-fences label{text-transform:none;letter-spacing:0;font-weight:500;color:var(--text-2)}
 .al-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:16px 0}
+.tag-demo{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;background:var(--warn-soft);color:var(--text-2);border:1px solid var(--border-strong);border-radius:4px;padding:0 5px;margin-left:4px}
 .pager{display:flex;align-items:center;gap:10px;justify-content:flex-end;padding:10px 16px;color:var(--text-2);font-size:13px;flex-wrap:wrap}
 .empty-row td{text-align:center;color:var(--text-3);padding:28px}
 
@@ -330,6 +331,7 @@ details.rules[open] summary::before{transform:rotate(90deg)}
         <option value="missing">Missing days only</option>
         <option value="kmflag">Km discrepancies</option>
         <option value="hflag">Hours discrepancies</option>
+        <option value="left" class="srv-only">Left without prestart</option>
         <option value="comment">Has comment</option>
       </select>
     </div>
@@ -798,6 +800,8 @@ async function loadServer(quiet){
     const tc = s => s.replace(/\b\w/g, c => c.toUpperCase());
     S.server.scope = Object.values(d.filter || {}).map(v => v.map(tc).join(' / ')).join(' · ');
     S.comments = d.comments || {};
+    S.server.base = d.baseGeofences || [];
+    S.departures = (d.departures || []).map(x => { const lp = localParts(x.at); return { ...x, date: lp ? lp.date : x.waDate, hm: lp ? lp.hm : '' }; });
     S.A = null; render(true);
   } catch(e) { console.error(e); S.server.error = e.message; toast(e.message, true); render(true); }
   finally { S.server.loading = false; }
@@ -935,7 +939,10 @@ function analyse(){
   [...recs].sort(cmp).forEach(r => { if (r.fleet && r.rego) rego.set(r.fleet, r.rego); });
   if (S.vehicles) for (const [fl, v] of S.vehicles) if (v.rego) rego.set(fl, v.rego);   // Gearbox vehicle list wins
   const hFlagged = new Set([...hFlags.keys()]);
-  S.A = { recs, flags, rego, flagged, delta, series, hFlags, hFlagged, hDelta, hSeries, fleets, employees:[...new Set(recs.map(r=>r.employee))].filter(Boolean).sort(),
+  // first departure from base (truck park) per fleet per WA day
+  const deps = new Map();
+  for (const x of [...(S.departures || [])].sort((a, b) => a.at < b.at ? -1 : 1)) { const k = depKey(x.fleet, x.date); if (!deps.has(k)) deps.set(k, x); }
+  S.A = { recs, flags, rego, flagged, delta, series, hFlags, hFlagged, hDelta, hSeries, deps, fleets, employees:[...new Set(recs.map(r=>r.employee))].filter(Boolean).sort(),
           minDate: recs.reduce((m,r)=>!m||r.date<m?r.date:m,''), maxDate: recs.reduce((m,r)=>!m||r.date>m?r.date:m,'') };
   return S.A;
 }
@@ -1004,12 +1011,35 @@ function missingRows(A){
   return rows;
 }
 
+const depKey = (fleet, date) => String(fleet || '').replace(/\s+/g, '').toLowerCase() + '|' + date;
+const baseName = () => { const b = (S.server && S.server.base) || []; return b.length === 1 ? b[0] : 'base'; };
+// "Left without prestart" rows: first departure of the day with no completed prestart before it
+function departedRows(A){
+  if (S.f.emp) return [];
+  const out = [];
+  for (const [k, x] of A.deps) {
+    if (x.status === 'ok') continue;
+    if (S.f.fleet && x.fleet !== S.f.fleet && x.fleet.toLowerCase() !== S.f.fleet.toLowerCase()) continue;
+    if ((S.f.from && x.date < S.f.from) || (S.f.to && x.date > S.f.to)) continue;
+    if (x.status === 'pending' && A.recs.some(r => r.completed && depKey(r.fleet, r.date) === k)) continue;  // prestart arrived, check not run yet
+    const fleet = (A.fleets.find(f => f.toLowerCase() === x.fleet.toLowerCase())) || x.fleet;
+    const r = { missing:true, departed:true, id:'', fleet, employee:'', rego:'', desc:'', date:x.date, hm:x.hm, geofence:x.geofence, status:x.status, demo:!!x.demo };
+    if (S.f.q) { const q = S.f.q.toLowerCase(); if (!`${fleet} left ${x.geofence} without prestart ${(commentOf(r) || {}).text || ''}`.toLowerCase().includes(q)) continue; }
+    out.push(r);
+  }
+  return out;
+}
+
 function tableRows(A){
   const st = S.f.status;
+  if (st === 'left') return departedRows(A);
   let rows = [];
   if (st !== 'missing') rows = A.recs.filter(matchRec).filter(r =>
       !st || st === 'comment' || (st === 'completed' && r.completed) || (st === 'incomplete' && !r.completed) || (st === 'kmflag' && A.flagged.has(r.id)) || (st === 'hflag' && A.hFlagged.has(r.id)));
-  if (st === 'missing' || st === 'comment' || (!st && S.f.missing)) rows = rows.concat(missingRows(A));
+  const left = (!st || st === 'missing' || st === 'comment') ? departedRows(A) : [];
+  const leftKeys = new Set(left.map(r => depKey(r.fleet, r.date)));
+  if (st === 'missing' || st === 'comment' || (!st && S.f.missing)) rows = rows.concat(missingRows(A).filter(r => !leftKeys.has(depKey(r.fleet, r.date))));
+  rows = rows.concat(left);   // a departure without prestart replaces that day's "missing" row
   if (st === 'comment') rows = rows.filter(r => commentOf(r));
   return rows;
 }
@@ -1059,6 +1089,7 @@ const COLS = [
   { k:'rego', t:'Rego' },
   { k:'desc', t:'Description' },
   { k:'date', t:'Date' },
+  { k:'left', t:'Left base', server:true },
   { k:'employee', t:'Employee' },
   { k:'km', t:'Km', num:true, r:true },
   { k:'delta', t:'Δ km', num:true, r:true },
@@ -1072,6 +1103,7 @@ const COLS = [
 function sortVal(r, k, A){
   switch(k){
     case 'id': return r.missing ? -1 : idNum(r.id);
+    case 'left': { const x = r.departed ? r : A.deps && A.deps.get(depKey(r.fleet, r.date)); return x ? x.hm : null; }
     case 'date': return r.date + ' ' + (r.hm || '');
     case 'status': return r.missing ? 0 : r.completed ? 2 : 1;
     case 'delta': return A.delta.has(r.id) ? A.delta.get(r.id) : null;
@@ -1158,6 +1190,7 @@ function renderTiles(A){
   const miss = missingRows(A).length;
   const kmf = recs.filter(r => A.flagged.has(r.id)).length;
   const hf = recs.filter(r => A.hFlagged.has(r.id)).length;
+  const leftN = SERVER ? departedRows(A).length : 0;
   const { from, to } = range(A);
   const U = usage(S.f.emp ? 'employee' : 'fleet', A, from, to);
   let exp = 0, ok = 0;
@@ -1169,7 +1202,8 @@ function renderTiles(A){
     <div class="tile" data-go="incomplete"><div class="k"><i class="dot" style="background:var(--warn)"></i>Incomplete</div><div class="v num">${fmtN(inc)}</div><div class="s">started, not finished</div></div>
     <div class="tile" data-go="missing"><div class="k"><i class="dot" style="background:var(--crit)"></i>Missing days</div><div class="v num">${fmtN(miss)}</div><div class="s">${pct}% of expected days covered</div></div>
     <div class="tile" data-go="kmflag"><div class="k"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--crit)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>Km discrepancies</div><div class="v num">${fmtN(kmf)}</div><div class="s">readings flagged</div></div>
-    <div class="tile" data-go="hflag"><div class="k"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--crit)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>Hours discrepancies</div><div class="v num">${fmtN(hf)}</div><div class="s">readings flagged</div></div>`;
+    <div class="tile" data-go="hflag"><div class="k"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--crit)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>Hours discrepancies</div><div class="v num">${fmtN(hf)}</div><div class="s">readings flagged</div></div>` +
+    (SERVER ? `<div class="tile" data-go="left"><div class="k"><i class="dot" style="background:var(--crit)"></i>Left without prestart</div><div class="v num">${fmtN(leftN)}</div><div class="s">departures from ${esc(baseName())}</div></div>` : '');
   $('#cRecords').textContent = fmtN(tableRows(A).length);
   $('#cUsage').textContent = fmtN(miss); $('#cUsage').classList.toggle('bad', miss > 0);
   $('#cKm').textContent = fmtN(kmf); $('#cKm').classList.toggle('bad', kmf > 0);
@@ -1182,6 +1216,9 @@ function flagHtml(A, id, which){
   return fl.map(f => `<div class="${f.kind === 'match' ? '' : 'flag'}" title="${esc(f.detail)}">${f.kind === 'match' ? '↔' : '⚠'} ${esc(f.label)}</div>`).join('');
 }
 function statusBadge(r){
+  if (r.departed) return r.status === 'pending'
+    ? '<span class="badge"><i class="dot" style="background:var(--text-3)"></i>Left · checking</span>'
+    : '<span class="badge crit"><i class="dot"></i>Left without prestart</span>';
   if (r.missing) return '<span class="badge crit"><i class="dot"></i>Missing</span>';
   const fails = Array.isArray(r.fails) && r.fails.length
     ? ` <span class="flag" title="${esc(r.fails.join('\n'))}">⚠ ${r.fails.length} failed item${r.fails.length > 1 ? 's' : ''}</span>` : '';
@@ -1192,26 +1229,59 @@ function headHtml(cols, sort){
   return '<tr>' + cols.map(c => `<th class="sortable${c.r ? ' r':''}" data-k="${c.k}" aria-sort="${sort.key === c.k ? (sort.dir > 0 ? 'ascending':'descending') : 'none'}">${esc(c.t)} <span class="arr">${sort.key === c.k ? (sort.dir > 0 ? '▲':'▼') : ''}</span></th>`).join('') + '</tr>';
 }
 
+function leftCell(r, A){
+  const x = r.departed ? r : A.deps && A.deps.get(depKey(r.fleet, r.date));
+  if (!x || !x.hm) return '<td></td>';
+  const t = timeOf(x), late = !r.missing && r.completed && r.hm && r.hm > x.hm;
+  const tip = `Left ${x.geofence} ${t} WA${late ? ' — prestart completed after leaving' : ''}${x.demo ? ' (demo record)' : ''}`;
+  return `<td class="${late || r.departed ? 'km-bad' : ''}" title="${esc(tip)}">${t}${late ? ' ⚠' : ''}</td>`;
+}
+function cellHtml(r, k, A){
+  if (r.missing) switch (k) {
+    case 'id': return '<td class="muted">—</td>';
+    case 'fleet': return `<td><b>${esc(r.fleet)}</b></td>`;
+    case 'desc': return r.departed
+      ? `<td class="flag">Left ${esc(r.geofence)}, no prestart${r.demo ? ' <span class="tag-demo">demo</span>' : ''}</td>`
+      : '<td class="muted">No prestart recorded</td>';
+    case 'date': return `<td>${fmtDate(r.date)}</td>`;
+    case 'left': return leftCell(r, A);
+    case 'employee': return `<td>${esc(r.employee)}</td>`;
+    case 'status': return `<td>${statusBadge(r)}</td>`;
+    case 'comment': return commentCell(r);
+    default: return '<td></td>';
+  }
+  const fl = A.flagged.has(r.id), hfl = A.hFlagged.has(r.id);
+  switch (k) {
+    case 'id': return `<td class="num">${esc(r.id)}</td>`;
+    case 'fleet': return `<td><b>${esc(r.fleet)}</b></td>`;
+    case 'rego': return `<td>${esc(r.rego)}</td>`;
+    case 'desc': return `<td>${esc(r.desc)}</td>`;
+    case 'date': return `<td>${dateTime(r)}</td>`;
+    case 'left': return leftCell(r, A);
+    case 'employee': return `<td>${esc(r.employee)}</td>`;
+    case 'km': return `<td class="r num ${fl && r.completed ? 'km-bad' : ''}">${fmtN(r.km)}</td>`;
+    case 'delta': { const d = A.delta.get(r.id); return `<td class="r num ${d != null && (d < 0 || d > S.settings.maxKmPerDay) ? 'km-bad' : 'muted'}">${d != null ? (d > 0 ? '+' : '') + fmtN(d) : ''}</td>`; }
+    case 'hours': return `<td class="r num ${hfl && r.completed ? 'km-bad' : ''}">${fmtN(r.hours)}</td>`;
+    case 'hdelta': { const d = A.hDelta.get(r.id); return `<td class="r num ${d != null && (d < 0 || d > S.settings.maxHoursPerDay) ? 'km-bad' : 'muted'}">${d != null ? (d > 0 ? '+' : '') + fmtN(d) : ''}</td>`; }
+    case 'status': return `<td>${statusBadge(r)}</td>`;
+    case 'timeTaken': return `<td class="muted">${esc(r.timeTaken)}</td>`;
+    case 'flag': return `<td>${flagHtml(A, r.id)}</td>`;
+    case 'comment': return commentCell(r);
+  }
+  return '<td></td>';
+}
+
 function renderTable(A){
   const rows = sortRows(tableRows(A), S.sort, A);
   const pages = Math.max(1, Math.ceil(rows.length / PAGE));
   if (S.page >= pages) S.page = pages - 1;
   const slice = rows.slice(S.page * PAGE, S.page * PAGE + PAGE);
-  $('#tbl thead').innerHTML = headHtml(COLS, S.sort);
+  const cols = COLS.filter(c => !c.server || SERVER).map(c => c.k === 'left' ? { ...c, t:`Left ${baseName()}` } : c);
+  $('#tbl thead').innerHTML = headHtml(cols, S.sort);
   $('#tbl tbody').innerHTML = slice.length ? slice.map(r => {
-    if (r.missing) return `<tr class="row-missing"><td class="muted">—</td><td><b>${esc(r.fleet)}</b></td><td></td><td class="muted">No prestart recorded</td><td>${fmtDate(r.date)}</td><td>${esc(r.employee)}</td><td></td><td></td><td></td><td></td><td>${statusBadge(r)}</td><td></td><td></td>${commentCell(r)}</tr>`;
-    const fl = A.flagged.has(r.id), hfl = A.hFlagged.has(r.id);
-    const d = A.delta.get(r.id), hd = A.hDelta.get(r.id);
-    const cls = fl || hfl ? 'row-flag' : (!r.completed ? 'row-incomplete' : '');
-    return `<tr class="${cls}">
-      <td class="num">${esc(r.id)}</td><td><b>${esc(r.fleet)}</b></td><td>${esc(r.rego)}</td><td>${esc(r.desc)}</td>
-      <td>${dateTime(r)}</td><td>${esc(r.employee)}</td>
-      <td class="r num ${fl && r.completed ? 'km-bad' : ''}">${fmtN(r.km)}</td>
-      <td class="r num ${d != null && (d < 0 || d > S.settings.maxKmPerDay) ? 'km-bad' : 'muted'}">${d != null ? (d > 0 ? '+' : '') + fmtN(d) : ''}</td>
-      <td class="r num ${hfl && r.completed ? 'km-bad' : ''}">${fmtN(r.hours)}</td>
-      <td class="r num ${hd != null && (hd < 0 || hd > S.settings.maxHoursPerDay) ? 'km-bad' : 'muted'}">${hd != null ? (hd > 0 ? '+' : '') + fmtN(hd) : ''}</td>
-      <td>${statusBadge(r)}</td><td class="muted">${esc(r.timeTaken)}</td><td>${flagHtml(A, r.id)}</td>${commentCell(r)}</tr>`;
-  }).join('') : `<tr class="empty-row"><td colspan="${COLS.length}">No records match the filters.</td></tr>`;
+    const cls = r.missing ? 'row-missing' : (A.flagged.has(r.id) || A.hFlagged.has(r.id)) ? 'row-flag' : (!r.completed ? 'row-incomplete' : '');
+    return `<tr class="${cls}">${cols.map(c => cellHtml(r, c.k, A)).join('')}</tr>`;
+  }).join('') : `<tr class="empty-row"><td colspan="${cols.length}">No records match the filters.</td></tr>`;
   $('#pager').innerHTML = rows.length > PAGE
     ? `<span>${fmtN(S.page*PAGE+1)}–${fmtN(Math.min(rows.length,(S.page+1)*PAGE))} of ${fmtN(rows.length)}</span><button class="btn" data-p="-1" ${S.page===0?'disabled':''}>Prev</button><button class="btn" data-p="1" ${S.page>=pages-1?'disabled':''}>Next</button>`
     : `<span>${fmtN(rows.length)} row${rows.length===1?'':'s'}</span>`;
@@ -1583,13 +1653,13 @@ function exportCsv(){
   const A = analyse();
   const rows = sortRows(tableRows(A), S.sort, A);
   const q = v => { const s = String(v ?? ''); return /[",\n]/.test(s) ? '"' + s.replace(/"/g,'""') + '"' : s; };
-  const head = ['Groups','SubGroups','Prestart #','Fleet #','Registration','Description','Date','Time (WA)','Weekday','Employee','Employee #','Kilometres','Km change','Hours','Hours change','Type','Status','Time taken','Gearbox Entry','Km issue','Km issue detail','Hours issue','Hours issue detail','Comment','Comment by','Comment date'];
+  const head = ['Groups','SubGroups','Prestart #','Fleet #','Registration','Description','Date','Time (WA)','Left base (WA)','Weekday','Employee','Employee #','Kilometres','Km change','Hours','Hours change','Type','Status','Time taken','Gearbox Entry','Km issue','Km issue detail','Hours issue','Hours issue detail','Comment','Comment by','Comment date'];
   const lines = [head.join(',')];
   for (const r of rows) {
     const fl = A.flags.get(r.id) || [];
     const d = r.date ? `${r.date.slice(8,10)}/${r.date.slice(5,7)}/${r.date.slice(0,4)}` : '';
-    lines.push([r.group, r.subgroup, r.id, r.fleet, r.rego, r.desc, d, r.missing ? '' : timeOf(r), r.date ? DOW[dowOf(r.date)] : '', r.employee, r.empNo, r.km, A.delta.get(r.id), r.hours, A.hDelta.get(r.id), r.type,
-      r.missing ? 'Missing' : r.completed ? 'Completed' : 'Incomplete', r.timeTaken, r.missing ? '' : r.gearbox,
+    lines.push([r.group, r.subgroup, r.id, r.fleet, r.rego, r.departed ? `Left ${r.geofence} without prestart` : r.desc, d, r.missing ? '' : timeOf(r), (() => { const x = r.departed ? r : A.deps.get(depKey(r.fleet, r.date)); return x ? timeOf(x) : ''; })(), r.date ? DOW[dowOf(r.date)] : '', r.employee, r.empNo, r.km, A.delta.get(r.id), r.hours, A.hDelta.get(r.id), r.type,
+      r.departed ? 'Left without prestart' : r.missing ? 'Missing' : r.completed ? 'Completed' : 'Incomplete', r.timeTaken, r.missing ? '' : r.gearbox,
       fl.map(f => f.label).join('; '), fl.map(f => f.detail).join(' | '),
       (A.hFlags.get(r.id) || []).map(f => f.label).join('; '), (A.hFlags.get(r.id) || []).map(f => f.detail).join(' | '),
       (commentOf(r) || {}).text, (commentOf(r) || {}).by, (commentOf(r) || {}).at].map(q).join(','));
@@ -1695,6 +1765,7 @@ addEventListener('drop', e => { e.preventDefault(); dragN = 0; $('#dropOv').clas
 let rT; addEventListener('resize', () => { clearTimeout(rT); rT = setTimeout(() => { if (S.records.length && S.tab !== 'records') render(); }, 150); });
 
 /* ---------- boot ---------- */
+if (!SERVER) document.querySelectorAll('.srv-only').forEach(o => o.remove());
 load();
 render(true);
 if (SERVER) {

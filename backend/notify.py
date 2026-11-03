@@ -219,14 +219,14 @@ def process_departures(table, items, settings, now=None):
     deps = sorted([i for i in items if i.get('kind') == 'departure'], key=lambda d: d['at'])
     done = []
     for d in deps:
-        if d.get('status') != 'pending' or parse_iso(d.get('checkAfter')) > now:
+        if d.get('demo') or d.get('status') != 'pending' or parse_iso(d.get('checkAfter')) > now:
             continue
         at = parse_iso(d['at'])
         p = prestart_before(prestarts, d['fleet'], d['waDate'], at + dt.timedelta(minutes=settings['graceMinutes']))
         upd = {'checkedAt': now.isoformat(timespec='seconds')}
         if p:
             upd.update(status='ok', prestartId=str(p.get('id')))
-        elif any(x is not d and norm_fleet(x['fleet']) == norm_fleet(d['fleet']) and x.get('waDate') == d['waDate']
+        elif any(x is not d and not x.get('demo') and norm_fleet(x['fleet']) == norm_fleet(d['fleet']) and x.get('waDate') == d['waDate']
                  and x.get('status') in ('alerted', 'no-recipients', 'disabled') for x in deps):
             upd.update(status='repeat')                       # already alerted for this truck today
         elif not settings['alertsEnabled']:
@@ -397,7 +397,7 @@ def build_report(items, allowed_fleets, now=None, work_days=None):
         return rows
 
     today_rows, y_rows = day_status(t_iso), day_status(y_iso)
-    deps = [i for i in items if i.get('kind') == 'departure' and i.get('waDate') in (y_iso, t_iso)
+    deps = [i for i in items if i.get('kind') == 'departure' and not i.get('demo') and i.get('waDate') in (y_iso, t_iso)
             and i.get('status') in ('alerted', 'no-recipients', 'disabled')]   # first departure per truck per day
     deps.sort(key=lambda d: d['at'])
     since = (now - dt.timedelta(hours=24)).isoformat()
