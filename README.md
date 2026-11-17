@@ -87,6 +87,8 @@ The Gearbox public API cannot *read* prestarts (the endpoint is create-only), so
 
 **Vehicle filter.** `GET /prestarts` only returns prestarts for vehicles matching the Lambda environment variables `FILTER_SUBGROUPS` (currently `Geraldton`) and `FILTER_TYPES` (currently `Prime Mover`), plus optional `FILTER_GROUPS`. The values are comma-separated, case-insensitive and matched against the Gearbox vehicle list. Every prestart is still stored, so changing the filter (Lambda → Configuration → Environment variables) takes effect immediately without losing data. Fleets missing from the Gearbox vehicle list are hidden while a filter is set.
 
+**Renumbered fleets.** In Nov 2026 Gearbox fleet IDs changed (e.g. MGN50 → R0029). The old → new list is `FLEET_ALIASES` in `index.html` and `backend/notify.py`; the backend can override it with the Lambda env var `FLEET_ALIASES="R0030=MGN51,R0029=MGN50,…"`. Each truck shows as **R0029 (MGN50)** in the page and emails. Prestarts, departures and movements arriving under an old ID are stored under the new ID, with the old one kept in `oldFleet`. The vehicle sync skips the old vehicles, and existing records were migrated on 17 Nov 2026 after a DynamoDB backup (`PrestartMonitor-before-fleet-id-migration-20261117`).
+
 **Times.** Prestart times (from the webhook's `completed_at`) are shown in local Geraldton time (Australia/Perth, UTC+8) regardless of the viewer's computer, and the prestart date follows WA time. Change `LOCAL_TZ` in `index.html` to use another zone. Excel-imported history has no time.
 
 ### Departure alerts and the daily report
