@@ -93,6 +93,7 @@ def _parse_aliases(spec):
 
 
 NEW_BY_OLD, PLATE_BY_NEW = _parse_aliases(os.environ.get('FLEET_ALIASES') or _DEFAULT_ALIASES)
+FLEET_ALIASES = {NEW_BY_OLD[re.sub(r'\s+', '', old).lower()]: old for old in PLATE_BY_NEW.values()}   # {'R0029': 'MGN50'}
 
 
 def norm_fleet(s):
@@ -100,6 +101,12 @@ def norm_fleet(s):
     n = re.sub(r'\s+', '', str(s or '')).lower()
     new = NEW_BY_OLD.get(n)
     return re.sub(r'\s+', '', new).lower() if new else n
+
+
+def canon_fleet(s):
+    """Old fleet ID / plate -> new Gearbox ID ('MGN50' -> 'R0029'); anything else unchanged."""
+    raw = str(s or '').strip()
+    return NEW_BY_OLD.get(re.sub(r'\s+', '', raw).lower(), raw)
 
 
 def fleet_label(s):
@@ -200,7 +207,7 @@ def is_base(geofence, settings):
 
 def ingest_movement(table, ev):
     """Store a forwarded geofence event. Returns a short description of what was done."""
-    fleet = str(ev.get('label') or ev.get('fleet') or ev.get('thingId') or '').strip()
+    fleet = canon_fleet(str(ev.get('label') or ev.get('fleet') or ev.get('thingId') or '').strip())
     direction = str(ev.get('direction') or '').lower()
     geofence = str(ev.get('geofence') or '').strip()
     at = None

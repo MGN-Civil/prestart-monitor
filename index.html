@@ -547,6 +547,18 @@ const SERVER = CONFIG.apiBase && CONFIG.origins.includes(location.origin);
 /* ---------- constants & state ---------- */
 const STORE_KEY = 'prestartMonitor.v1';
 const DOW = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+/* Gearbox fleet IDs were renumbered (Nov 2026): new ID -> old ID / plate. Records under an old ID are treated as the
+   new ID and every fleet is shown as e.g. "R0029 (MGN50)". Live mode takes the list from the server. */
+let FLEET_ALIASES = { R0029:'MGN50', R0030:'MGN51', R0055:'MGN52', R0048:'MGN53', R0038:'MGN54', R0039:'MGN55', R0056:'Wintrns' };
+let NEW_BY_OLD = {};
+const fkey = s => String(s ?? '').replace(/\s+/g, '').toLowerCase();
+function setFleetAliases(m){
+  if (m && typeof m === 'object' && Object.keys(m).length) FLEET_ALIASES = m;
+  NEW_BY_OLD = {}; for (const [n, o] of Object.entries(FLEET_ALIASES)) NEW_BY_OLD[fkey(o)] = n;
+}
+setFleetAliases();
+const canonFleet = f => NEW_BY_OLD[fkey(f)] || f;
+const fleetLabel = f => { const p = FLEET_ALIASES[canonFleet(f)]; return p ? `${canonFleet(f)} (${p})` : String(f ?? ''); };
 const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const DEFAULT_SETTINGS = { days:[1,1,1,1,1,1,0], activeOnly:true, maxKmPerDay:1200, sameDayTol:50, minKm:10, maxHoursPerDay:24, hoursSameDayTol:2, minHours:10 };
 const PAGE = 100;
@@ -596,7 +608,7 @@ function load(){
   try {
     const raw = localStorage.getItem(STORE_KEY); if (!raw) return;
     const d = JSON.parse(raw);
-    if (!SERVER && Array.isArray(d.records)) S.records = d.records;
+    if (!SERVER && Array.isArray(d.records)) S.records = d.records.map(r => ({ ...r, fleet: canonFleet(r.fleet) }));
     if (!SERVER && d.meta) S.meta = d.meta;
     if (d.settings) S.settings = { ...DEFAULT_SETTINGS, ...d.settings };
     if (d.groupBy) S.groupBy = d.groupBy;
@@ -649,7 +661,7 @@ function normalise(o){
   const r = {};
   for (const [k,v] of Object.entries(o)) { const key = HEAD[normHead(k)]; if (key && r[key] === undefined) r[key] = v; }
   const rec = {
-    id: str(r.id), group: str(r.group), subgroup: str(r.subgroup), fleet: str(r.fleet), rego: str(r.rego), desc: str(r.desc),
+    id: str(r.id), group: str(r.group), subgroup: str(r.subgroup), fleet: canonFleet(str(r.fleet)), rego: str(r.rego), desc: str(r.desc),
     date: parseDate(r.date), employee: str(r.employee), empNo: str(r.empNo), km: num(r.km), hours: num(r.hours),
     type: str(r.type), timeTaken: str(r.timeTaken), gearbox: truthy(r.gearbox), notes: str(r.notes)
   };
@@ -675,7 +687,7 @@ async function readFile(file){
     const j = JSON.parse(await file.text());
     const arr = Array.isArray(j) ? j : (j.records || []);
     if (!SERVER && j && j.comments && typeof j.comments === 'object') Object.assign(S.comments, j.comments);
-    return arr.map(x => (x && x.fleet !== undefined && x.date && /^\d{4}-/.test(x.date)) ? { ...x, id:String(x.id) } : normalise(x));
+    return arr.map(x => (x && x.fleet !== undefined && x.date && /^\d{4}-/.test(x.date)) ? { ...x, id:String(x.id), fleet:canonFleet(x.fleet) } : normalise(x));
   }
   if (!window.XLSX) throw new Error('Spreadsheet reader failed to load (needs internet access to cdnjs.cloudflare.com). JSON backups still import.');
   const buf = await file.arrayBuffer();
@@ -777,7 +789,7 @@ async function api(path, opts = {}){
 S.vehicles = new Map();
 S.server = { user:'', loadedAt:null, updatedAt:'', loading:false, error:'' };
 function fromServer(r){
-  return { id:String(r.id), group:r.group||'', subgroup:r.subgroup||'', fleet:r.fleet||'', rego:r.rego||'', desc:r.desc||'',
+  return { id:String(r.id), group:r.group||'', subgroup:r.subgroup||'', fleet:canonFleet(r.fleet||''), rego:r.rego||'', desc:r.desc||'',
     date:r.date||'', employee:r.employee||'', empNo:r.empNo != null ? String(r.empNo) : '', km: r.km == null ? null : Number(r.km),
     hours: r.hours == null ? null : Number(r.hours), type:r.type||'', completed: r.completed !== false, timeTaken:r.timeTaken||'',
     gearbox: !!r.gearbox, notes:r.notes||'', completedAt:r.completedAt||'', fails: Array.isArray(r.fails) ? r.fails : [], source:r.source||'' };
@@ -788,7 +800,8 @@ async function loadServer(quiet){
   if (!quiet) setStatus('Loading prestarts…');
   try {
     const d = await api('/prestarts');
-    S.vehicles = new Map((d.vehicles || []).map(v => [v.fleet, v]));
+    setFleetAliases(d.fleetAliases);
+    S.vehicles = new Map((d.vehicles || []).map(v => [canonFleet(v.fleet), { ...v, fleet: canonFleet(v.fleet) }]));
     S.records = (d.records || []).map(fromServer).map(r => {
       const lp = localParts(r.completedAt);
       if (lp) { r.date = lp.date; r.hm = lp.hm; }   // Geraldton (WA) date + time
@@ -801,7 +814,7 @@ async function loadServer(quiet){
     S.server.scope = Object.values(d.filter || {}).map(v => v.map(tc).join(' / ')).join(' · ');
     S.comments = d.comments || {};
     S.server.base = d.baseGeofences || [];
-    S.departures = (d.departures || []).map(x => { const lp = localParts(x.at); return { ...x, date: lp ? lp.date : x.waDate, hm: lp ? lp.hm : '' }; });
+    S.departures = (d.departures || []).map(x => { const lp = localParts(x.at); return { ...x, fleet: canonFleet(x.fleet), date: lp ? lp.date : x.waDate, hm: lp ? lp.hm : '' }; });
     S.A = null; render(true);
   } catch(e) { console.error(e); S.server.error = e.message; toast(e.message, true); render(true); }
   finally { S.server.loading = false; }
@@ -994,7 +1007,7 @@ function matchRec(r){
   if (f.to && r.date > f.to) return false;
   if (f.q) {
     const q = f.q.toLowerCase();
-    if (![r.id, r.fleet, r.rego, r.desc, r.employee, r.group, r.timeTaken, r.km, (S.comments[String(r.id)] || {}).text].some(v => String(v ?? '').toLowerCase().includes(q))) return false;
+    if (![r.id, fleetLabel(r.fleet), r.rego, r.desc, r.employee, r.group, r.timeTaken, r.km, (S.comments[String(r.id)] || {}).text].some(v => String(v ?? '').toLowerCase().includes(q))) return false;
   }
   return true;
 }
@@ -1007,7 +1020,7 @@ function missingRows(A){
     if (byEmp ? g.key !== S.f.emp : (S.f.fleet && g.key !== S.f.fleet)) continue;
     for (const c of g.cells) if (c.state === 'miss') rows.push({ missing:true, id:'', fleet: byEmp ? '' : g.key, employee: byEmp ? g.key : '', date:c.d, rego:'', desc:'' });
   }
-  if (S.f.q) { const q = S.f.q.toLowerCase(); return rows.filter(r => (r.fleet + ' ' + r.employee + ' missing ' + ((commentOf(r) || {}).text || '')).toLowerCase().includes(q)); }
+  if (S.f.q) { const q = S.f.q.toLowerCase(); return rows.filter(r => (fleetLabel(r.fleet) + ' ' + r.employee + ' missing ' + ((commentOf(r) || {}).text || '')).toLowerCase().includes(q)); }
   return rows;
 }
 
@@ -1168,7 +1181,7 @@ function render(rebuildOptions){
 
 function buildOptions(A){
   const fs = $('#fFleet'), es = $('#fEmp');
-  fs.innerHTML = '<option value="">All fleets</option>' + A.fleets.map(f => `<option>${esc(f)}</option>`).join('');
+  fs.innerHTML = '<option value="">All fleets</option>' + A.fleets.map(f => `<option value="${esc(f)}">${esc(fleetLabel(f))}</option>`).join('');
   es.innerHTML = '<option value="">All employees</option>' + A.employees.map(e => `<option>${esc(e)}</option>`).join('');
   if (!A.fleets.includes(S.f.fleet)) S.f.fleet = '';
   if (!A.employees.includes(S.f.emp)) S.f.emp = '';
@@ -1239,7 +1252,7 @@ function leftCell(r, A){
 function cellHtml(r, k, A){
   if (r.missing) switch (k) {
     case 'id': return '<td class="muted">—</td>';
-    case 'fleet': return `<td><b>${esc(r.fleet)}</b></td>`;
+    case 'fleet': return `<td><b>${esc(fleetLabel(r.fleet))}</b></td>`;
     case 'desc': return r.departed
       ? `<td class="flag">Left ${esc(r.geofence)}, no prestart${r.demo ? ' <span class="tag-demo">demo</span>' : ''}</td>`
       : '<td class="muted">No prestart recorded</td>';
@@ -1253,7 +1266,7 @@ function cellHtml(r, k, A){
   const fl = A.flagged.has(r.id), hfl = A.hFlagged.has(r.id);
   switch (k) {
     case 'id': return `<td class="num">${esc(r.id)}</td>`;
-    case 'fleet': return `<td><b>${esc(r.fleet)}</b></td>`;
+    case 'fleet': return `<td><b>${esc(fleetLabel(r.fleet))}</b></td>`;
     case 'rego': return `<td>${esc(r.rego)}</td>`;
     case 'desc': return `<td>${esc(r.desc)}</td>`;
     case 'date': return `<td>${dateTime(r)}</td>`;
@@ -1379,24 +1392,24 @@ function drawMatrix(groups, dates, A){
     let exp = 0, ok = 0;
     const cells = g.cells.map((c, i) => {
       if (c.expected) { exp++; if (c.state === 'done') ok++; }
-      const label = `${g.key} ${fmtDate(c.d)}: ${c.state === 'done' ? 'completed' : c.state === 'inc' ? 'incomplete only' : c.state === 'miss' ? 'missing' : c.state === 'off' ? 'not expected' : 'inactive'}`;
+      const label = `${fleetLabel(g.key)} ${fmtDate(c.d)}: ${c.state === 'done' ? 'completed' : c.state === 'inc' ? 'incomplete only' : c.state === 'miss' ? 'missing' : c.state === 'off' ? 'not expected' : 'inactive'}`;
       return `<div class="mc ${c.state}${c.list.length ? ' has':''}${c.km ? ' kmf':''}${wkCls(c.d,i)}" data-g="${gi}" data-i="${i}" aria-label="${esc(label)}"></div>`;
     }).join('');
     const pct = exp ? Math.round(ok/exp*100) + '%' : '';
-    h += `<div class="mrow"><div class="mlabel" title="${esc(g.key)}"><b>${esc(g.key)}</b><span class="pct">${pct}</span></div><div class="mcells">${cells}</div></div>`;
+    h += `<div class="mrow"><div class="mlabel" title="${esc(fleetLabel(g.key))}"><b>${esc(fleetLabel(g.key))}</b><span class="pct">${pct}</span></div><div class="mcells">${cells}</div></div>`;
   });
   el.innerHTML = h;
 }
 function matrixTip(e){
   const c = e.target.closest('.mc[data-g]'); if (!c || !matrixData) return hideTip();
   const g = matrixData.groups[+c.dataset.g], cell = g.cells[+c.dataset.i];
-  if (cell.state === 'inactive' || (cell.state === 'off' && !cell.list.length)) return showTip(e, `<div class="t">${esc(g.key)} · ${fmtDate(cell.d)}</div><div class="row">${cell.state === 'off' ? 'Not an expected prestart day' : 'Outside active period'}</div>`);
+  if (cell.state === 'inactive' || (cell.state === 'off' && !cell.list.length)) return showTip(e, `<div class="t">${esc(fleetLabel(g.key))} · ${fmtDate(cell.d)}</div><div class="row">${cell.state === 'off' ? 'Not an expected prestart day' : 'Outside active period'}</div>`);
   const st = { done:['var(--good)','Completed'], inc:['var(--warn)','Incomplete only'], miss:['var(--crit)','Missing — no prestart'], off:['var(--cell-off)','Not expected'] }[cell.state];
   const A = analyse();
-  let h = `<div class="t">${esc(g.key)} · ${fmtDate(cell.d)}</div><div class="row"><i class="sw" style="background:${st[0]}"></i><b>${st[1]}</b></div>`;
+  let h = `<div class="t">${esc(fleetLabel(g.key))} · ${fmtDate(cell.d)}</div><div class="row"><i class="sw" style="background:${st[0]}"></i><b>${st[1]}</b></div>`;
   for (const r of cell.list.slice(0,6)) {
     const fl = A.flags.get(r.id);
-    h += `<div class="row" style="margin-top:3px">${r.completed ? '✓' : '○'} ${timeOf(r) ? timeOf(r) + ' · ' : ''}${esc(S.groupBy === 'fleet' ? r.employee : r.fleet)} · ${r.km != null ? fmtN(r.km) + ' km' : ''}${fl ? ` <span class="flag">⚠ ${esc(fl[0].label)}</span>` : ''}</div>`;
+    h += `<div class="row" style="margin-top:3px">${r.completed ? '✓' : '○'} ${timeOf(r) ? timeOf(r) + ' · ' : ''}${esc(S.groupBy === 'fleet' ? r.employee : fleetLabel(r.fleet))} · ${r.km != null ? fmtN(r.km) + ' km' : ''}${fl ? ` <span class="flag">⚠ ${esc(fl[0].label)}</span>` : ''}</div>`;
   }
   if (cell.list.length > 6) h += `<div class="row">+${cell.list.length - 6} more</div>`;
   showTip(e, h);
@@ -1463,7 +1476,7 @@ function calTip(e){
   const c = e.target.closest('.chip[data-d]'); if (!c || !calData) return hideTip();
   const it = calData.get(c.dataset.d)?.get(c.dataset.k); if (!it) return hideTip();
   const st = { done:['#087a08','Completed prestart'], inc:['var(--warn)','Incomplete only'], miss:['var(--crit)','Missing — no prestart'] }[it.state];
-  let h = `<div class="t">${esc(it.label)}${it.fleet && it.fleet !== it.label ? ` <span class="muted">· ${esc(it.fleet)}</span>` : ''}</div><div class="row">${fmtDate(c.dataset.d)}</div><div class="row"><i class="sw" style="background:${st[0]}"></i><b>${st[1]}</b></div>`;
+  let h = `<div class="t">${esc(it.label)}${it.fleet && it.fleet !== it.label ? ` <span class="muted">· ${esc(fleetLabel(it.fleet))}</span>` : ''}</div><div class="row">${fmtDate(c.dataset.d)}</div><div class="row"><i class="sw" style="background:${st[0]}"></i><b>${st[1]}</b></div>`;
   for (const r of it.recs.slice(0,5)) h += `<div class="row" style="margin-top:3px">${r.completed ? '✓' : '○'} ${timeOf(r) ? timeOf(r) + ' · ' : ''}${esc(r.employee)}${r.km != null ? ' · ' + fmtN(r.km) + ' km' : ''}${r.timeTaken ? ' · ' + esc(r.timeTaken) : ''}</div>`;
   showTip(e, h);
 }
@@ -1491,7 +1504,7 @@ function renderSeries(A, C){
     const okPts = pts.filter(p => p.ok);
     const used = okPts.length > 1 ? okPts[okPts.length-1].r[C.field] - okPts[0].r[C.field] : 0;
     charts.push({ fl, pts });
-    return `<div class="mini"><div class="mini-h"><b>${esc(fl)}</b><span class="s">${okPts.length ? fmtN(used) + ' ' + C.used : 'no readings'}</span>${flaggedHere ? `<span class="bad">⚠ ${flaggedHere} flagged</span>` : '<span class="ok">✓ no issues</span>'}</div><div class="chart-box" data-c="${i}"></div></div>`;
+    return `<div class="mini"><div class="mini-h"><b>${esc(fleetLabel(fl))}</b><span class="s">${okPts.length ? fmtN(used) + ' ' + C.used : 'no readings'}</span>${flaggedHere ? `<span class="bad">⚠ ${flaggedHere} flagged</span>` : '<span class="ok">✓ no issues</span>'}</div><div class="chart-box" data-c="${i}"></div></div>`;
   }).join('') || '<div class="muted">No fleets match the filters.</div>';
   charts.forEach((c, i) => drawOdo(mult.querySelector(`[data-c="${i}"]`), c.pts, from, to, C));
 
@@ -1508,7 +1521,7 @@ function renderSeries(A, C){
   $(C.tbl + ' thead').innerHTML = headHtml(cols, sortState);
   $(C.tbl + ' tbody').innerHTML = rows.length ? rows.map(r => {
     const fl = flags.get(r.id); const d = delta.get(r.id);
-    return `<tr><td><b>${esc(r.fleet)}</b></td><td>${dateTime(r)}</td><td>${esc(r.employee)}</td><td class="num">${esc(r.id)}</td>
+    return `<tr><td><b>${esc(fleetLabel(r.fleet))}</b></td><td>${dateTime(r)}</td><td>${esc(r.employee)}</td><td class="num">${esc(r.id)}</td>
       <td class="r num km-bad">${fmtN(r[C.field])}</td><td class="r num">${d != null ? (d > 0 ? '+' : '') + fmtN(d) : ''}</td><td class="r num">${fmtN(r[other.k])}</td>
       <td>${flagHtml(A, r.id, C.field)}</td><td class="wrap-cell muted">${fl.map(f => esc(f.detail)).join('<br>')}</td></tr>`;
   }).join('') : `<tr class="empty-row"><td colspan="${cols.length}">No ${C.label.toLowerCase()} discrepancies for the current filters.</td></tr>`;
@@ -1554,7 +1567,7 @@ function drawOdo(box, pts, from, to, C = SERIES.km){
   box.onmousemove = e => {
     const t = e.target.closest('[data-i]'); if (!t) return hideTip();
     const p = pts[+t.dataset.i], fl = flags.get(p.r.id), d = delta.get(p.r.id);
-    showTip(e, `<div class="t">${esc(p.r.fleet)} · ${fmtDate(p.r.date)}${timeOf(p.r) ? ' ' + timeOf(p.r) : ''}</div>
+    showTip(e, `<div class="t">${esc(fleetLabel(p.r.fleet))} · ${fmtDate(p.r.date)}${timeOf(p.r) ? ' ' + timeOf(p.r) : ''}</div>
       <div class="row">${C.label} <b>${fmtN(val(p))}</b>${d != null ? ` <span class="muted">(${d > 0 ? '+' : ''}${fmtN(d)})</span>` : ''}</div>
       <div class="row">${esc(p.r.employee)} · #${esc(p.r.id)}</div>
       ${fl ? fl.map(f => `<div class="row" style="margin-top:3px"><span class="${f.kind==='match'?'':'flag'}">${f.kind==='match'?'↔':'⚠'} ${esc(f.label)}</span></div><div class="row" style="font-size:11px">${esc(f.detail)}</div>`).join('') : ''}`);
@@ -1596,10 +1609,10 @@ function renderAlerts(){
     pending: `<span class="badge"><i class="dot" style="background:var(--text-3)"></i>Checking</span> <span class="muted">after ${esc(timeOf({ hm:(localParts(x.checkAfter) || {}).hm }))}</span>`
   })[x.status] || esc(x.status);
   $('#depTbl tbody').innerHTML = (d.departures || []).length
-    ? d.departures.map(x => `<tr><td>${esc(waWhen(x.at))}</td><td><b>${esc(x.fleet)}</b></td><td>${esc(x.geofence)}</td><td>${res(x)}</td></tr>`).join('')
+    ? d.departures.map(x => `<tr><td>${esc(waWhen(x.at))}</td><td><b>${esc(fleetLabel(x.fleet))}</b></td><td>${esc(x.geofence)}</td><td>${res(x)}</td></tr>`).join('')
     : `<tr class="empty-row"><td colspan="4">${st.baseGeofences.length ? 'No departures from base yet.' : 'Choose a base geofence above to start checking departures.'}</td></tr>`;
   $('#mvTbl tbody').innerHTML = (d.movements || []).length
-    ? d.movements.map(x => `<tr><td>${esc(waWhen(x.at))}</td><td><b>${esc(x.fleet)}</b></td><td>${x.direction === 'exit' ? '↗ Left' : '↘ Arrived'}</td><td>${esc(x.geofence)}</td></tr>`).join('')
+    ? d.movements.map(x => `<tr><td>${esc(waWhen(x.at))}</td><td><b>${esc(fleetLabel(x.fleet))}</b></td><td>${x.direction === 'exit' ? '↗ Left' : '↘ Arrived'}</td><td>${esc(x.geofence)}</td></tr>`).join('')
     : '<tr class="empty-row"><td colspan="4">No truck movements received yet. The Geraldton opsboard forwards PACCAR geofence events here once it is connected.</td></tr>';
 }
 function alertsForm(){

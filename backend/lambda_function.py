@@ -31,7 +31,7 @@ _secret_cache = {'t': 0, 'v': None}
 
 # Fields a record may carry (same shape the web page uses)
 FIELDS = {'id', 'gid', 'group', 'subgroup', 'fleet', 'rego', 'desc', 'date', 'completedAt', 'employee', 'empNo',
-          'km', 'hours', 'type', 'completed', 'timeTaken', 'gearbox', 'notes', 'fails', 'source'}
+          'km', 'hours', 'type', 'completed', 'timeTaken', 'gearbox', 'notes', 'fails', 'source', 'oldFleet'}
 
 
 # ---------------------------------------------------------------- helpers
@@ -76,6 +76,10 @@ def body_of(event):
 def upsert(rec):
     """Merge fields into the item with this id (fields not supplied are kept)."""
     rec = {k: v for k, v in rec.items() if k in FIELDS and v is not None and v != ''}
+    if rec.get('fleet'):
+        new = notify.canon_fleet(rec['fleet'])   # renumbered fleets: store under the new Gearbox ID
+        if new != str(rec['fleet']).strip():
+            rec['oldFleet'], rec['fleet'] = rec['fleet'], new
     rid = str(rec.pop('id'))
     rec['updatedAt'] = dt.datetime.now(dt.timezone.utc).isoformat(timespec='seconds')
     names, values, sets = {}, {':kind': 'prestart'}, ['#kind = :kind']
@@ -314,8 +318,8 @@ def sync_vehicles():
     with table.batch_writer(overwrite_by_pkeys=['id']) as bw:
         for v in vehicles:
             fl = v.get('fleet_number')
-            if not fl:
-                continue
+            if not fl or notify.canon_fleet(fl) != fl.strip():
+                continue   # old fleet ID that was renumbered: the new vehicle replaces it
             desc = ' '.join(x for x in (v.get('make'), v.get('model'), v.get('type')) if x)
             bw.put_item(Item=to_ddb({k: x for k, x in {
                 'id': 'vehicle#' + fl, 'kind': 'vehicle', 'fleet': fl, 'rego': v.get('registration'), 'desc': desc,
@@ -383,7 +387,8 @@ def handle_api(event, route):
         base = notify.get_settings(table)['baseGeofences']
         return resp(200, {'records': recs, 'vehicles': vehicles, 'updatedAt': latest, 'vehiclesUpdatedAt': vsync, 'user': email,
                           'filter': {k: sorted(v) for k, v in flt.items()}, 'comments': comments,
-                          'departures': deps, 'baseGeofences': base})
+                          'departures': deps, 'baseGeofences': base,
+                          'fleetAliases': notify.FLEET_ALIASES})
     if route == 'POST /comments':
         try:
             b = json.loads(body_of(event) or '{}')
