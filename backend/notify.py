@@ -74,8 +74,42 @@ def num(v):
         return None
 
 
+# Gearbox fleet IDs were renumbered in Nov 2026. Old ID / plate -> new ID. Old and new are treated as one truck
+# (history, km/hours checks, PACCAR movements labelled with the plate) and shown as "R0029 (MGN50)".
+# Override with Lambda env FLEET_ALIASES="R0030=MGN51,R0038=MGN54,...".
+_DEFAULT_ALIASES = 'R0030=MGN51,R0038=MGN54,R0055=MGN52,R0029=MGN50,R0039=MGN55,R0048=MGN53,R0056=Wintrns'
+
+
+def _parse_aliases(spec):
+    new_by_old, plate_by_new = {}, {}
+    for pair in spec.split(','):
+        if '=' not in pair:
+            continue
+        new, old = (x.strip() for x in pair.split('=', 1))
+        if new and old:
+            new_by_old[re.sub(r'\s+', '', old).lower()] = new
+            plate_by_new[re.sub(r'\s+', '', new).lower()] = old
+    return new_by_old, plate_by_new
+
+
+NEW_BY_OLD, PLATE_BY_NEW = _parse_aliases(os.environ.get('FLEET_ALIASES') or _DEFAULT_ALIASES)
+
+
 def norm_fleet(s):
-    return re.sub(r'\s+', '', str(s or '')).lower()
+    """Normalised fleet key; an old fleet ID / plate maps to its new Gearbox ID."""
+    n = re.sub(r'\s+', '', str(s or '')).lower()
+    new = NEW_BY_OLD.get(n)
+    return re.sub(r'\s+', '', new).lower() if new else n
+
+
+def fleet_label(s):
+    """'MGN50' or 'R0029' -> 'R0029 (MGN50)'; other fleets unchanged."""
+    k = norm_fleet(s)
+    plate = PLATE_BY_NEW.get(k)
+    if not plate:
+        return str(s or '')
+    new = NEW_BY_OLD[re.sub(r'\s+', '', plate).lower()]
+    return f"{new} ({plate})"
 
 
 def wa_date(rec):
@@ -286,19 +320,20 @@ def wrap_html(title, inner):
 def send_alert(to, dep, last):
     at = parse_iso(dep['at'])
     when = f"{wa_time(at)} WA, {fmt_date(dep['waDate'])}"
-    subject = f"⚠ {dep['fleet']} left {dep['geofence']} without a prestart ({wa_time(at)} WA)"
+    truck = fleet_label(dep['fleet'])
+    subject = f"⚠ {truck} left {dep['geofence']} without a prestart ({wa_time(at)} WA)"
     last_txt = 'none on record'
     if last:
         lt = parse_iso(last.get('completedAt'))
         last_txt = f"{fmt_date(wa_date(last))}{' ' + wa_time(lt) if lt else ''} by {last.get('employee') or 'unknown'} (#{last.get('id')})"
-    rows = [('Truck', dep['fleet']), ('Left', dep['geofence']), ('Time', when), ('Last prestart', last_txt)]
+    rows = [('Truck', truck), ('Left', dep['geofence']), ('Time', when), ('Last prestart', last_txt)]
     inner = ('<p style="margin:0 0 12px;font-size:14px">This truck left base and no completed prestart was recorded for it today.</p>'
              '<table style="border-collapse:collapse;width:100%">' +
              ''.join(f'<tr><td style="{STYLE_TD};color:#52514e;width:130px">{esc(k)}</td><td style="{STYLE_TD}"><b>{esc(v)}</b></td></tr>' for k, v in rows) +
              '</table>')
-    text = (f"{dep['fleet']} left {dep['geofence']} at {when} and no completed prestart was recorded for it today.\n"
+    text = (f"{truck} left {dep['geofence']} at {when} and no completed prestart was recorded for it today.\n"
             f"Last prestart: {last_txt}\n\n{APP_URL}")
-    return send_email(to, subject, wrap_html(f"{dep['fleet']} left base without a prestart", inner), text)
+    return send_email(to, subject, wrap_html(f"{truck} left base without a prestart", inner), text)
 
 
 # ---------------------------------------------------------------- daily report
@@ -359,9 +394,11 @@ def build_report(items, allowed_fleets, now=None, work_days=None):
     # trucks in scope: the filtered vehicle list when there is one, else every fleet with prestarts
     names = {}
     for r in prestarts:
-        names.setdefault(norm_fleet(r.get('fleet')), r.get('fleet'))
+        k = norm_fleet(r.get('fleet'))
+        if k not in names or k == re.sub(r'\s+', '', str(r.get('fleet') or '')).lower():
+            names[k] = r.get('fleet')   # prefer the record that uses the new ID itself
     keys = allowed_fleets if allowed_fleets is not None else set(names)
-    fleets = sorted((names.get(k) or k.upper() for k in keys if k), key=lambda s: (len(s), s.lower()))
+    fleets = sorted((names.get(k) or k.upper() for k in keys if k), key=lambda s: (len(fleet_label(s)), fleet_label(s).lower()))
 
     # km / hours issues (full history for context, report only yesterday + today)
     issues = []
@@ -418,7 +455,7 @@ def build_report(items, allowed_fleets, now=None, work_days=None):
                 cell = '<span style="color:#9a6a00;font-weight:600">◐ Started, not completed</span> ' + esc('; '.join(who(r) for r in inc))
             else:
                 cell = '<span style="color:#d03b3b;font-weight:600">✗ No prestart</span>'
-            h += f'<tr><td style="{STYLE_TD}"><b>{esc(fl)}</b></td><td style="{STYLE_TD}">{cell}</td></tr>'
+            h += f'<tr><td style="{STYLE_TD}"><b>{esc(fleet_label(fl))}</b></td><td style="{STYLE_TD}">{cell}</td></tr>'
         return h + '</table>'
 
     n_today = sum(1 for _, d, _ in today_rows if d)
@@ -430,7 +467,7 @@ def build_report(items, allowed_fleets, now=None, work_days=None):
         inner += f'<table style="border-collapse:collapse;width:100%"><tr><th style="{STYLE_TH}">When</th><th style="{STYLE_TH}">Truck</th><th style="{STYLE_TH}">Geofence</th></tr>'
         for d in deps:
             at = parse_iso(d['at'])
-            inner += f'<tr><td style="{STYLE_TD}">{esc(fmt_date(d["waDate"]))} {esc(wa_time(at))}</td><td style="{STYLE_TD}"><b>{esc(d["fleet"])}</b></td><td style="{STYLE_TD}">{esc(d.get("geofence"))}</td></tr>'
+            inner += f'<tr><td style="{STYLE_TD}">{esc(fmt_date(d["waDate"]))} {esc(wa_time(at))}</td><td style="{STYLE_TD}"><b>{esc(fleet_label(d["fleet"]))}</b></td><td style="{STYLE_TD}">{esc(d.get("geofence"))}</td></tr>'
         inner += '</table>'
     else:
         inner += '<p style="margin:0;font-size:13px;color:#52514e">None.</p>'
@@ -440,7 +477,7 @@ def build_report(items, allowed_fleets, now=None, work_days=None):
         for r, msgs in issues:
             km_s = '' if r['km'] is None else f"{r['km']:,.0f}"
             hr_s = '' if r['hours'] is None else f"{r['hours']:,.0f}"
-            inner += (f'<tr><td style="{STYLE_TD}">{esc(fmt_date(r["_d"]))}</td><td style="{STYLE_TD}"><b>{esc(r["fleet"])}</b></td>'
+            inner += (f'<tr><td style="{STYLE_TD}">{esc(fmt_date(r["_d"]))}</td><td style="{STYLE_TD}"><b>{esc(fleet_label(r["fleet"]))}</b></td>'
                       f'<td style="{STYLE_TD}">{esc(r.get("employee"))}</td><td style="{STYLE_TD}">{km_s}</td><td style="{STYLE_TD}">{hr_s}</td>'
                       f'<td style="{STYLE_TD};color:#b02a2a">{esc("; ".join(msgs))}</td></tr>')
         inner += '</table>'
@@ -455,12 +492,12 @@ def build_report(items, allowed_fleets, now=None, work_days=None):
     subject = f"Prestart report {fmt_date(t_iso)}: {n_today}/{len(fleets)} done today · {len(deps)} left without prestart · {len(issues)} km/hours issues"
     text = [f"Prestart report — {fmt_date(t_iso)} (WA)", '', f"Today so far ({n_today}/{len(fleets)}):"]
     for fl, done, inc in today_rows:
-        text.append(f"  {fl}: " + ('done — ' + '; '.join(who(r) for r in done) if done else 'started, not completed' if inc else 'NO PRESTART'))
+        text.append(f"  {fleet_label(fl)}: " + ('done — ' + '; '.join(who(r) for r in done) if done else 'started, not completed' if inc else 'NO PRESTART'))
     text += ['', f"{prev_label} ({n_y}/{len(fleets)}):"]
     for fl, done, inc in y_rows:
-        text.append(f"  {fl}: " + ('done' if done else 'started, not completed' if inc else 'NO PRESTART'))
-    text += ['', 'Left base without a prestart:'] + ([f"  {fmt_date(d['waDate'])} {wa_time(parse_iso(d['at']))} {d['fleet']} ({d.get('geofence')})" for d in deps] or ['  none'])
-    text += ['', 'Km / hours issues:'] + ([f"  {fmt_date(r['_d'])} {r['fleet']} {r.get('employee')}: {'; '.join(m)}" for r, m in issues] or ['  none'])
+        text.append(f"  {fleet_label(fl)}: " + ('done' if done else 'started, not completed' if inc else 'NO PRESTART'))
+    text += ['', 'Left base without a prestart:'] + ([f"  {fmt_date(d['waDate'])} {wa_time(parse_iso(d['at']))} {fleet_label(d['fleet'])} ({d.get('geofence')})" for d in deps] or ['  none'])
+    text += ['', 'Km / hours issues:'] + ([f"  {fmt_date(r['_d'])} {fleet_label(r['fleet'])} {r.get('employee')}: {'; '.join(m)}" for r, m in issues] or ['  none'])
     text += ['', APP_URL]
     return subject, wrap_html(f"Daily prestart report · {fmt_date(t_iso)}", inner), '\n'.join(text)
 
@@ -469,9 +506,9 @@ def comment_where(key, by_id):
     """'36160' -> 'MGN52 Thu 22 Oct (#36160)'; 'missing#MGN53#2026-10-21' -> 'MGN53 Wed 21 Oct (missing day)'."""
     m = re.match(r'missing#(.+)#(\d{4}-\d{2}-\d{2})$', key or '')
     if m:
-        return f"{m.group(1)} {fmt_date(m.group(2))} (missing day)"
+        return f"{fleet_label(m.group(1))} {fmt_date(m.group(2))} (missing day)"
     r = by_id.get(str(key))
-    return f"{r['fleet']} {fmt_date(r['_d'])} (#{key})" if r else f"#{key}"
+    return f"{fleet_label(r['fleet'])} {fmt_date(r['_d'])} (#{key})" if r else f"#{key}"
 
 
 def report_due(settings, last_sent_date, now=None):
